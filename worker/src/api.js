@@ -17,6 +17,9 @@ export const ESPERA_ANALIZAR_MS = 5 * 60_000
 export const MARGEN_SALUD_MS = 2 * HORA
 export const DATOS_VIEJOS_MS = 2 * HORA
 export const CURVA_HORARIA_MS = 30 * 24 * HORA
+/** Más puntos que esto (tras submuestrear) se reducen a CURVA_MAXIMA. */
+export const CURVA_UMBRAL = 2000
+export const CURVA_MAXIMA = 1000
 export const CAPITAL_MINIMO = 100
 export const CAPITAL_MAXIMO = 1_000_000
 
@@ -91,6 +94,7 @@ export const aTitular = (t, usados) => ({
 
 /**
  * Curva para la interfaz: horaria los últimos 30 días y, antes, el último punto de cada día UTC.
+ * GET /api/bot la obtiene ya así de D1 (repo.datosBot); esta es la definición de referencia.
  * @param {{ t: number, valor: number, saldo: number, hodl: number|null }[]} puntos ordenados por t
  */
 export function submuestrearCurva(puntos) {
@@ -98,6 +102,19 @@ export function submuestrearCurva(puntos) {
   const corte = puntos[puntos.length - 1].t - CURVA_HORARIA_MS
   const dia = 24 * HORA
   return puntos.filter((p, i) => p.t >= corte || Math.floor(p.t / dia) !== Math.floor(puntos[i + 1].t / dia))
+}
+
+/**
+ * Con más de CURVA_UMBRAL puntos (años de historia), se queda con CURVA_MAXIMA repartidos por igual,
+ * siempre con el primero y el último. Con menos, devuelve la misma lista.
+ * @template T
+ * @param {T[]} puntos
+ * @returns {T[]}
+ */
+export function limitarCurva(puntos) {
+  if (puntos.length <= CURVA_UMBRAL) return puntos
+  const paso = (puntos.length - 1) / (CURVA_MAXIMA - 1)
+  return Array.from({ length: CURVA_MAXIMA }, (_, i) => puntos[Math.round(i * paso)])
 }
 
 // ── Parámetros ──────────────────────────────────────────────────────────────
@@ -196,8 +213,8 @@ async function moneda({ env, ahora, params }) {
 /** @param {Contexto} c @returns {Promise<Respuesta>} */
 async function bot({ env, url }) {
   const sim = await simulacionPedida(env.DB, url)
-  const d = await repo.datosBot(env.DB, sim.id)
-  const abiertas = d.abiertas.map((p) => aPosicion(p, d.precios[p.simbolo] ?? p.precio_entrada))
+  const d = await repo.datosBot(env.DB, sim.id, CURVA_HORARIA_MS)
+  const abiertas = d.abiertas.map((p) => aPosicion(p, p.precio_actual ?? p.precio_entrada))
   const operaciones = d.operaciones.map((o) => ({
     tipo: o.lado, simbolo: o.simbolo, comision: o.comision, deslizamiento: o.deslizamiento, pnlNeto: o.pnl_neto ?? undefined,
   }))
@@ -205,12 +222,12 @@ async function bot({ env, url }) {
   const metricas = calcularMetricas({
     capitalInicial: sim.capital_inicial, saldo: sim.saldo,
     abiertas: abiertas.map((p) => ({ unidades: p.unidades, coste: p.coste, precioActual: p.precioActual })),
-    operaciones, curva,
+    operaciones, resumenCurva: d.resumenCurva,
   })
   return {
     cuerpo: {
       simulacion: aSimulacion(sim), metricas, porMoneda: metricasPorMoneda(operaciones), abiertas,
-      curva: submuestrearCurva(curva), hodl: sim.hodl_json ? JSON.parse(sim.hodl_json) : null,
+      curva: limitarCurva(curva), hodl: sim.hodl_json ? JSON.parse(sim.hodl_json) : null,
     },
   }
 }

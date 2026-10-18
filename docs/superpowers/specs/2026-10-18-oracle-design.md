@@ -422,7 +422,7 @@ a partir de las filas de D1.
 | Peticiones: 100.000/día por cuenta | 48 crons + ~300 PWA | < 0,5 % |
 | KV escrituras: 1.000/día por cuenta (usado por 4 proyectos) | **0**: ORACLE no usa KV | 0 % |
 | D1 escrituras: 100.000/día | ~5 decisiones + ~5 progreso + 1 capital + ~50 titulares/h ≈ 1.700/día | ~1,7 % |
-| D1 lecturas: 5 M/día | consultas indexadas y acotadas | < 1 % |
+| D1 lecturas: 5 M/día | consultas indexadas y acotadas: ninguna ruta recorre una tabla entera ni ordena aparte (comprobado con `EXPLAIN QUERY PLAN` en los tests); `GET /api/bot` lee ~720 puntos horarios + ~2 filas por día de historia, no la curva ni las decisiones completas | < 1 % |
 | Subpeticiones: 50/invocación | noticias ≈ 19; mercado = 15 velas USDT + 5 EUR + 15 derivados (3 por moneda) + 1 F&G + hasta 2 LLM (Groq, Gemini) = 38 | bajo límite |
 | CPU: 10 ms/invocación | parsing ligero (regex para RSS, sin librerías XML); mercado: ~1,3 MB de JSON de velas (15 × 501 USDT + 5 × 48 EUR) validado y convertido en una sola pasada, funding por moneda en vez de los ~200 KB de todo el exchange; `[observability]` activo para ver la CPU real por invocación en Workers Logs | por invocación: si se excede, solo falla esa ejecución de ORACLE |
 
@@ -517,6 +517,9 @@ CREATE TABLE capital (
   valor_cartera REAL NOT NULL,
   saldo REAL NOT NULL,
   valor_hodl REAL,
+  -- resumen acumulado de la curva hasta este punto (migración 0002), calculado al insertar
+  -- desde el punto anterior con las mismas operaciones que core/metricas.js:
+  maximo REAL, drawdown REAL, maximo_hodl REAL, drawdown_hodl REAL, ultimo_hodl REAL,
   PRIMARY KEY (simulacion_id, vela_1h)
 );
 
@@ -568,6 +571,14 @@ con `motivo_salida = 'stop_loss'`. Las métricas se calculan desde `operaciones`
 para que sus decisiones sean idénticas a las del backtest.
 
 Purga: el cron de noticias borra titulares > 7 días y ejecuciones > 30 días.
+
+**Lecturas acotadas (migración 0002).** Índices `ejecuciones(inicio)`, `posiciones(simulacion_id, estado)`,
+`operaciones(simulacion_id)` y `decisiones(simulacion_id, simbolo)`; la última ejecución de cada tipo
+es una búsqueda con `LIMIT 1` sobre `ejecuciones(tipo, inicio)`. `GET /api/bot` toma el precio actual
+de cada posición de la última decisión con precio de su moneda (índice único), las métricas de la curva
+(drawdowns, último HODL, duración) del último punto de `capital`, y la curva de la interfaz (horaria 30
+días y diaria antes) con una búsqueda por día; con más de 2.000 puntos se reduce a 1.000 (primero y
+último incluidos). Las operaciones se leen enteras: crecen con la actividad del bot, no con las horas.
 
 ## 11. API (Worker)
 

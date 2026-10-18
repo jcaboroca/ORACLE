@@ -46,17 +46,36 @@ function resumenOperaciones(operaciones) {
 }
 
 /**
+ * @typedef {{ ultimoHodl: number|null, drawdownMaximo: number, drawdownMaximoHodl: number|null, duracion: number }} ResumenCurva
+ * Lo único que las métricas necesitan de la curva de capital. El Worker lo guarda acumulado en cada punto
+ * de `capital` (mismas operaciones, mismo orden: mismo resultado bit a bit) para no leer toda la curva.
+ */
+
+/**
+ * @param {{ t: number, valor: number, hodl: number|null }[]} curva ordenada por t
+ * @returns {ResumenCurva}
+ */
+export function resumirCurva(curva) {
+  const hodls = curva.map((p) => p.hodl).filter((h) => h !== null)
+  return {
+    ultimoHodl: hodls.length ? /** @type {number} */ (hodls[hodls.length - 1]) : null,
+    drawdownMaximo: drawdownMaximo(curva.map((p) => p.valor)),
+    drawdownMaximoHodl: hodls.length ? drawdownMaximo(/** @type {number[]} */ (hodls)) : null,
+    duracion: curva.length > 1 ? curva[curva.length - 1].t - curva[0].t : 0,
+  }
+}
+
+/**
  * @param {{ capitalInicial: number, saldo: number,
  *   abiertas: { unidades: number, coste: number, precioActual: number }[],
  *   operaciones: OperacionMetrica[],
- *   curva: { t: number, valor: number, hodl: number|null }[] }} datos
+ *   curva?: { t: number, valor: number, hodl: number|null }[], resumenCurva?: ResumenCurva }} datos
+ *   curva completa o, en su lugar, su resumen ya calculado (resumirCurva).
  */
-export function calcularMetricas({ capitalInicial, saldo, abiertas, operaciones, curva }) {
+export function calcularMetricas({ capitalInicial, saldo, abiertas, operaciones, curva = [], resumenCurva = resumirCurva(curva) }) {
   const valorAbiertas = abiertas.reduce((s, p) => s + p.unidades * p.precioActual, 0)
   const valorCartera = saldo + valorAbiertas
-  const ultimoHodl = [...curva].reverse().find((p) => p.hodl !== null)?.hodl ?? null
-  const hodls = curva.map((p) => p.hodl).filter((h) => h !== null)
-  const duracion = curva.length > 1 ? curva[curva.length - 1].t - curva[0].t : 0
+  const { ultimoHodl, duracion } = resumenCurva
   const resumen = resumenOperaciones(operaciones)
   return {
     valorCartera,
@@ -65,8 +84,8 @@ export function calcularMetricas({ capitalInicial, saldo, abiertas, operaciones,
     beneficioNoRealizado: abiertas.reduce((s, p) => s + p.unidades * p.precioActual - p.coste, 0),
     rentabilidad: valorCartera / capitalInicial - 1,
     rentabilidadHodl: ultimoHodl === null ? null : ultimoHodl / capitalInicial - 1,
-    drawdownMaximo: drawdownMaximo(curva.map((p) => p.valor)),
-    drawdownMaximoHodl: hodls.length ? drawdownMaximo(/** @type {number[]} */ (hodls)) : null,
+    drawdownMaximo: resumenCurva.drawdownMaximo,
+    drawdownMaximoHodl: resumenCurva.drawdownMaximoHodl,
     operacionesPorSemana: duracion > 0 ? operaciones.length / (duracion / SEMANA) : null,
   }
 }

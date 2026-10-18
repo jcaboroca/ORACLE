@@ -4,6 +4,7 @@ import { describe, test } from 'node:test'
 import { estadoInicial } from '../../core/bot.js'
 import * as v1 from '../../core/estrategia-v1.js'
 import { ejecutarHora } from '../../core/hora.js'
+import { resumirCurva } from '../../core/metricas.js'
 import { HORA } from '../../core/velas.js'
 import {
   cargarEstado, crearSimulacion, guardarCapital, guardarHodl, guardarPasoMoneda, listarSimulaciones,
@@ -192,8 +193,31 @@ describe('atomicidad e idempotencia', () => {
     const { db, sim } = await primeraHora()
     await guardarCapital(db, { simulacionId: sim.id, vela: CIERRE, valorCartera: 10_000, saldo: 10_000, valorHodl: null })
     await guardarCapital(db, { simulacionId: sim.id, vela: CIERRE, valorCartera: 1, saldo: 1, valorHodl: 1 })
-    assert.deepEqual(await filas(db, 'SELECT * FROM capital'), [
+    assert.deepEqual(await filas(db, 'SELECT simulacion_id, vela_1h, valor_cartera, saldo, valor_hodl FROM capital'), [
       { simulacion_id: sim.id, vela_1h: CIERRE, valor_cartera: 10_000, saldo: 10_000, valor_hodl: null },
     ])
+  })
+
+  test('capital: cada punto guarda el resumen de la curva hasta él, idéntico a core/metricas.js (bit a bit)', async () => {
+    const db = crearD1()
+    const sim = await nuevaSimulacion(db)
+    // Enteros incluidos (10.000, 12.000, 9.000): la división no puede ser entera.
+    const valores = [10_000, 12_000, 9_000, 9_500.123, 13_000, 12_999.5, 7_000.25, 7_100, 13_500, 1_000.75]
+    const hodls = [null, null, 10_000, 9_000, null, 11_000.5, 8_000, 8_000, 12_000, 5_000.125]
+    /** @type {{ t: number, valor: number, hodl: number|null }[]} */
+    const curva = []
+    for (let k = 0; k < valores.length; k++) {
+      const p = { t: CIERRE + k * HORA, valor: valores[k], hodl: hodls[k] }
+      curva.push(p)
+      await guardarCapital(db, { simulacionId: sim.id, vela: p.t, valorCartera: p.valor, saldo: 1, valorHodl: p.hodl })
+      const fila = await db.prepare('SELECT drawdown, drawdown_hodl, ultimo_hodl FROM capital WHERE vela_1h = ?').bind(p.t).first()
+      const r = resumirCurva(curva)
+      assert.deepEqual(
+        { drawdownMaximo: fila.drawdown, drawdownMaximoHodl: fila.drawdown_hodl, ultimoHodl: fila.ultimo_hodl },
+        { drawdownMaximo: r.drawdownMaximo, drawdownMaximoHodl: r.drawdownMaximoHodl, ultimoHodl: r.ultimoHodl },
+        `punto ${k}`,
+      )
+    }
+    assert.ok(resumirCurva(curva).drawdownMaximo > 0.9)
   })
 })

@@ -1,6 +1,9 @@
 // @ts-check
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { describe, test } from 'node:test'
+import { resumirCurva } from '../../core/metricas.js'
 import { crearD1 } from './d1.js'
 
 /** @param {ReturnType<typeof crearD1>} db @param {number} [saldo] */
@@ -137,5 +140,27 @@ describe('D1 simulado', () => {
     await db.prepare('SELECT 1').first()
     await db.batch([db.prepare('SELECT 1'), db.prepare('SELECT 2')])
     assert.equal(db.llamadas, 3)
+  })
+
+  test('0002 rellena el resumen acumulado de los puntos de capital que ya existían, por simulación', () => {
+    const sqlite = new DatabaseSync(':memory:')
+    const migracion = (/** @type {string} */ n) => readFileSync(new URL(`../migrations/${n}`, import.meta.url), 'utf8')
+    sqlite.exec(migracion('0001_inicial.sql'))
+    /** @type {Record<number, { t: number, valor: number, hodl: number|null }[]>} */
+    const curvas = {
+      1: [[100, null], [120, null], [90, 50], [130.5, 40], [117, null], [60.25, 55]].map(([v, h], i) => ({ t: i * 3_600_000, valor: /** @type {number} */ (v), hodl: h })),
+      2: [[10, null], [5, null]].map(([v, h], i) => ({ t: i * 3_600_000, valor: /** @type {number} */ (v), hodl: h })),
+    }
+    const insertar = sqlite.prepare('INSERT INTO capital (simulacion_id, vela_1h, valor_cartera, saldo, valor_hodl) VALUES (?, ?, ?, 0, ?)')
+    // Desordenadas a propósito: el relleno sigue el orden de vela, no el de inserción.
+    for (const [id, curva] of Object.entries(curvas)) for (const p of [...curva].reverse()) insertar.run(Number(id), p.t, p.valor, p.hodl)
+    sqlite.exec(migracion('0002_indices.sql'))
+    for (const [id, curva] of Object.entries(curvas)) {
+      const filas = sqlite.prepare('SELECT drawdown, drawdown_hodl, ultimo_hodl FROM capital WHERE simulacion_id = ? ORDER BY vela_1h').all(Number(id))
+      filas.forEach((f, k) => {
+        const r = resumirCurva(curva.slice(0, k + 1))
+        assert.deepEqual({ ...f }, { drawdown: r.drawdownMaximo, drawdown_hodl: r.drawdownMaximoHodl, ultimo_hodl: r.ultimoHodl }, `sim ${id} punto ${k}`)
+      })
+    }
   })
 })

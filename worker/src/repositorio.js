@@ -169,14 +169,32 @@ export async function guardarPasoMoneda(db, paso) {
 }
 
 /**
- * Punto horario de la curva de capital; si ya existe, se conserva el primero.
+ * Punto horario de la curva de capital; si ya existe, se conserva el primero. Guarda además el resumen
+ * acumulado de la curva hasta este punto (máximos, drawdowns y último HODL) a partir del punto anterior,
+ * con las mismas operaciones y en el mismo orden que drawdownMaximo de core/metricas.js: el resultado es
+ * idéntico al de recorrer la curva entera. Los puntos llegan en orden de vela (uno por ejecución de mercado).
  * @param {D1} db
  * @param {{ simulacionId: number, vela: number, valorCartera: number, saldo: number, valorHodl: number|null }} punto
  */
 export function guardarCapital(db, { simulacionId, vela, valorCartera, saldo, valorHodl }) {
+  // Valor y HODL como REAL: un entero enlazado haría división entera en (máximo − valor) / máximo.
   return db.prepare(
-    'INSERT OR IGNORE INTO capital (simulacion_id, vela_1h, valor_cartera, saldo, valor_hodl) VALUES (?, ?, ?, ?, ?)',
-  ).bind(simulacionId, vela, valorCartera, saldo, valorHodl).run()
+    `INSERT OR IGNORE INTO capital (simulacion_id, vela_1h, valor_cartera, saldo, valor_hodl,
+       maximo, drawdown, maximo_hodl, drawdown_hodl, ultimo_hodl)
+     SELECT s, t, v, ?, h,
+       mx, MAX(COALESCE(dd, 0), CASE WHEN mx > 0 THEN (mx - v) / mx ELSE 0 END),
+       mh, CASE WHEN mh IS NULL THEN NULL WHEN h IS NULL THEN ddh
+         ELSE MAX(COALESCE(ddh, 0), CASE WHEN mh > 0 THEN (mh - h) / mh ELSE 0 END) END,
+       COALESCE(h, uh)
+     FROM (
+       SELECT s, t, v, h, MAX(COALESCE(p.maximo, v), v) AS mx,
+         CASE WHEN h IS NULL THEN p.maximo_hodl ELSE MAX(COALESCE(p.maximo_hodl, h), h) END AS mh,
+         p.drawdown AS dd, p.drawdown_hodl AS ddh, p.ultimo_hodl AS uh
+       FROM (SELECT ? AS s, ? AS t, CAST(? AS REAL) AS v, CAST(? AS REAL) AS h)
+       LEFT JOIN (SELECT maximo, drawdown, maximo_hodl, drawdown_hodl, ultimo_hodl FROM capital
+         WHERE simulacion_id = ? AND vela_1h < ? ORDER BY vela_1h DESC LIMIT 1) p ON 1
+     )`,
+  ).bind(saldo, simulacionId, vela, valorCartera, valorHodl, simulacionId, vela).run()
 }
 
 // ── Ejecuciones ──────────────────────────────────────────────────────────────
@@ -209,15 +227,22 @@ export function filaAEjecucion(fila) {
   }
 }
 
+/** La más reciente (inicio, id) de varias filas de ejecuciones. @param {any[]} filas */
+const masReciente = (filas) => filas.reduce(
+  (a, f) => (f && (!a || f.inicio > a.inicio || (f.inicio === a.inicio && f.id > a.id)) ? f : a), null,
+)
+
 /**
- * Ejecución más reciente de alguno de los tipos dados.
+ * Ejecución más reciente de alguno de los tipos dados: una búsqueda con LIMIT 1 por tipo sobre
+ * ejecuciones(tipo, inicio), en una sola llamada. Nunca ordena la tabla.
  * @param {D1} db @param {('noticias'|'mercado'|'manual')[]} tipos
  * @returns {Promise<Ejecucion|null>}
  */
 export async function ultimaEjecucion(db, tipos) {
-  const fila = await db.prepare(
-    `SELECT * FROM ejecuciones WHERE tipo IN (${tipos.map(() => '?').join(', ')}) ORDER BY inicio DESC, id DESC LIMIT 1`,
-  ).bind(...tipos).first()
+  const resultados = await db.batch(tipos.map((t) => db.prepare(
+    'SELECT * FROM ejecuciones WHERE tipo = ? ORDER BY inicio DESC, id DESC LIMIT 1',
+  ).bind(t)))
+  const fila = masReciente(resultados.map((r) => r.results[0]))
   return fila ? filaAEjecucion(fila) : null
 }
 
@@ -317,12 +342,16 @@ export async function senalesActuales(db) {
 
 // ── Lecturas de la API ───────────────────────────────────────────────────────
 
-/** Último Fear & Greed guardado por una ejecución de mercado o manual. @param {D1} db */
+/**
+ * Último Fear & Greed guardado por una ejecución de mercado o manual (una búsqueda por tipo, 1 llamada).
+ * @param {D1} db
+ */
 export async function ultimoFng(db) {
-  const fila = await db.prepare(
-    `SELECT detalle_json FROM ejecuciones WHERE tipo IN ('mercado', 'manual') AND json_extract(detalle_json, '$.fng') IS NOT NULL
+  const resultados = await db.batch(['mercado', 'manual'].map((t) => db.prepare(
+    `SELECT id, inicio, detalle_json FROM ejecuciones WHERE tipo = ? AND json_extract(detalle_json, '$.fng') IS NOT NULL
      ORDER BY inicio DESC, id DESC LIMIT 1`,
-  ).first()
+  ).bind(t)))
+  const fila = masReciente(resultados.map((r) => r.results[0]))
   return fila ? /** @type {import('./fuentes/fng.js').Fng} */ (JSON.parse(fila.detalle_json).fng) : null
 }
 
@@ -339,29 +368,64 @@ export async function resumenBot(db, simulacionId) {
 }
 
 /**
- * Todo lo que necesita GET /api/bot (1 llamada): posiciones abiertas, último precio EUR visto por
- * moneda (el de su última decisión con precio), operaciones y curva de capital completa.
- * @param {D1} db @param {number} simulacionId
+ * Todo lo que necesita GET /api/bot (1 llamada), con lecturas acotadas:
+ * - posiciones abiertas, cada una con `precio_actual` = precio de la última decisión con precio de su
+ *   moneda (búsqueda por el índice único de decisiones, no un recorrido de la historia);
+ * - operaciones (crecen con la actividad del bot, no con las horas);
+ * - el último punto de capital, con el resumen acumulado de la curva (core/metricas.js `ResumenCurva`);
+ * - la curva para la interfaz: todos los puntos de los últimos `horariaMs` y, antes, el último punto de
+ *   cada día UTC (lo mismo que submuestrearCurva de api.js), con una búsqueda por día.
+ * @param {D1} db @param {number} simulacionId @param {number} horariaMs
  */
-export async function datosBot(db, simulacionId) {
-  const [abiertas, precios, operaciones, curva] = await db.batch([
-    db.prepare("SELECT * FROM posiciones WHERE simulacion_id = ? AND estado = 'abierta' ORDER BY id").bind(simulacionId),
+export async function datosBot(db, simulacionId, horariaMs) {
+  const dia = 24 * HORA
+  const [abiertas, operaciones, ultimo, horaria, diaria] = await db.batch([
     db.prepare(
-      `SELECT d.simbolo, d.precio FROM decisiones d
-       JOIN (SELECT simbolo, MAX(vela_1h) AS vela FROM decisiones WHERE simulacion_id = ? AND precio IS NOT NULL GROUP BY simbolo) u
-         ON u.simbolo = d.simbolo AND u.vela = d.vela_1h
-       WHERE d.simulacion_id = ?`,
-    ).bind(simulacionId, simulacionId),
+      `SELECT p.*, (SELECT d.precio FROM decisiones d WHERE d.simulacion_id = p.simulacion_id AND d.simbolo = p.simbolo
+         AND d.precio IS NOT NULL ORDER BY d.vela_1h DESC LIMIT 1) AS precio_actual
+       FROM posiciones p WHERE p.simulacion_id = ? AND p.estado = 'abierta' ORDER BY p.id`,
+    ).bind(simulacionId),
     db.prepare('SELECT lado, simbolo, comision, deslizamiento, pnl_neto FROM operaciones WHERE simulacion_id = ? ORDER BY id')
       .bind(simulacionId),
-    db.prepare('SELECT vela_1h, valor_cartera, saldo, valor_hodl FROM capital WHERE simulacion_id = ? ORDER BY vela_1h')
-      .bind(simulacionId),
+    db.prepare(
+      `SELECT vela_1h, drawdown, drawdown_hodl, ultimo_hodl,
+         (SELECT vela_1h FROM capital WHERE simulacion_id = ? ORDER BY vela_1h LIMIT 1) AS primera
+       FROM capital WHERE simulacion_id = ? ORDER BY vela_1h DESC LIMIT 1`,
+    ).bind(simulacionId, simulacionId),
+    db.prepare(
+      `SELECT vela_1h, valor_cartera, saldo, valor_hodl FROM capital
+       WHERE simulacion_id = ? AND vela_1h >= (SELECT vela_1h FROM capital WHERE simulacion_id = ? ORDER BY vela_1h DESC LIMIT 1) - ?
+       ORDER BY vela_1h`,
+    ).bind(simulacionId, simulacionId, horariaMs),
+    db.prepare(
+      `WITH RECURSIVE
+         limites AS (
+           SELECT s, d,
+             (SELECT vela_1h FROM capital WHERE simulacion_id = s ORDER BY vela_1h LIMIT 1) AS primera,
+             (SELECT vela_1h FROM capital WHERE simulacion_id = s ORDER BY vela_1h DESC LIMIT 1) - ? AS corte
+           -- Enteros explícitos: un número enlazado puede llegar como REAL y primera / d no truncaría.
+           FROM (SELECT ? AS s, CAST(? AS INTEGER) AS d)
+         ),
+         dias(fin) AS (
+           SELECT (primera / d + 1) * d FROM limites WHERE primera IS NOT NULL
+           UNION ALL SELECT fin + d FROM dias, limites WHERE fin < corte
+         )
+       SELECT c.vela_1h, c.valor_cartera, c.saldo, c.valor_hodl FROM dias, limites l JOIN capital c
+         ON c.simulacion_id = l.s AND c.vela_1h = (SELECT vela_1h FROM capital
+           WHERE simulacion_id = l.s AND vela_1h >= dias.fin - l.d AND vela_1h < dias.fin ORDER BY vela_1h DESC LIMIT 1)
+       WHERE c.vela_1h < l.corte`,
+    ).bind(horariaMs, simulacionId, dia),
   ])
+  const u = ultimo.results[0]
+  /** @type {import('../../core/metricas.js').ResumenCurva} */
+  const resumenCurva = u
+    ? { ultimoHodl: u.ultimo_hodl, drawdownMaximo: u.drawdown, drawdownMaximoHodl: u.drawdown_hodl, duracion: u.vela_1h - u.primera }
+    : { ultimoHodl: null, drawdownMaximo: 0, drawdownMaximoHodl: null, duracion: 0 }
   return {
     abiertas: abiertas.results,
-    precios: /** @type {Record<string, number>} */ (Object.fromEntries(precios.results.map((p) => [p.simbolo, p.precio]))),
     operaciones: operaciones.results,
-    curva: curva.results,
+    resumenCurva,
+    curva: [...diaria.results.sort((a, b) => a.vela_1h - b.vela_1h), ...horaria.results],
   }
 }
 
@@ -383,10 +447,15 @@ export async function titularesDeMoneda(db, simbolo, desde, hasta, limite) {
  * @returns {Promise<{ filas: any[], siguienteCursor: number|null }>}
  */
 export async function pagina(db, tabla, { simulacionId, simbolo, cursor, limite }) {
+  // Solo los filtros presentes, para que el plan use el índice que ya viene ordenado por id.
+  const condiciones = ['simulacion_id = ?']
+  /** @type {(number|string)[]} */
+  const valores = [simulacionId]
+  if (simbolo !== null) condiciones.push('simbolo = ?') && valores.push(simbolo)
+  if (cursor !== null) condiciones.push('id < ?') && valores.push(cursor)
   const { results } = await db.prepare(
-    `SELECT * FROM ${tabla} WHERE simulacion_id = ? AND (? IS NULL OR simbolo = ?) AND (? IS NULL OR id < ?)
-     ORDER BY id DESC LIMIT ?`,
-  ).bind(simulacionId, simbolo, simbolo, cursor, cursor, limite + 1).all()
+    `SELECT * FROM ${tabla} WHERE ${condiciones.join(' AND ')} ORDER BY id DESC LIMIT ?`,
+  ).bind(...valores, limite + 1).all()
   const filas = results.slice(0, limite)
   return { filas, siguienteCursor: results.length > limite ? filas[filas.length - 1].id : null }
 }

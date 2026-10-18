@@ -3,13 +3,16 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { velaDeDecision } from '../../core/bot.js'
 import { ESTRATEGIA_ACTIVA } from '../../core/estrategias.js'
+import { calcularMetricas } from '../../core/metricas.js'
 import { HORA } from '../../core/velas.js'
-import { ESPERA_ANALIZAR_MS, TAMANO_PAGINA, atender, primeraFrase, submuestrearCurva } from '../src/api.js'
+import {
+  CURVA_MAXIMA, ESPERA_ANALIZAR_MS, TAMANO_PAGINA, atender, limitarCurva, primeraFrase, submuestrearCurva,
+} from '../src/api.js'
 import { BLOQUEO_MS, compararSeguro } from '../src/auth.js'
 import { ejecutarMercado } from '../src/ejecuciones/mercado.js'
-import { crearSimulacion, guardarPuntuaciones, insertarTitulares } from '../src/repositorio.js'
+import { crearSimulacion, guardarCapital, guardarPuntuaciones, insertarTitulares } from '../src/repositorio.js'
 import { simularFetch } from './ayudantes.js'
-import { crearD1 } from './d1.js'
+import { Sentencia, crearD1 } from './d1.js'
 import { ahoraDe, crearEscenario, fetchEscenario } from './escenario.js'
 
 const PIN = '4815162342'
@@ -279,6 +282,107 @@ describe('rutas con PIN', () => {
   })
 })
 
+/**
+ * Ejecuta `fn` anotando cada sentencia SQL que llega al D1 simulado y cuántas filas devuelve.
+ * @param {() => Promise<unknown>} fn
+ * @returns {Promise<{ sql: string, valores: any[], filas: number }[]>}
+ */
+async function espiarSql(fn) {
+  const original = Sentencia.prototype.ejecutar
+  /** @type {{ sql: string, valores: any[], filas: number }[]} */
+  const vistas = []
+  Sentencia.prototype.ejecutar = function () {
+    const r = original.call(this)
+    vistas.push({ sql: this.sql, valores: this.valores, filas: r.results.length })
+    return r
+  }
+  try {
+    await fn()
+  } finally {
+    Sentencia.prototype.ejecutar = original
+  }
+  return vistas
+}
+
+describe('lecturas de D1 acotadas', () => {
+  test('ninguna ruta recorre una tabla entera ni ordena con un B-tree temporal (EXPLAIN QUERY PLAN)', async () => {
+    const db = await conDatos()
+    const ahora = ahoraDe(5) + 20 * 60_000
+    const vistas = await espiarSql(async () => {
+      for (const ruta of [
+        '/api/salud', '/api/resumen', '/api/moneda/BTC', '/api/bot', '/api/bot?simulacion=1', '/api/bot/operaciones',
+        '/api/bot/operaciones?simbolo=BTC', '/api/bot/operaciones?cursor=3', '/api/bot/decisiones',
+        '/api/bot/decisiones?simbolo=ETH&cursor=9', '/api/simulaciones',
+      ]) assert.equal((await pedir(db, ruta, { ahora })).estado, 200, ruta)
+      assert.equal((await pedir(db, '/api/analizar', { metodo: 'POST', ahora })).estado, 200)
+      assert.equal((await pedir(db, '/api/resumen', { pin: 'x', ahora })).estado, 401)
+    })
+    // Tablas pequeñas por diseño: una fila por simulación o por moneda seguida.
+    const pequenas = new Set(['simulaciones', 'senales_actuales'])
+    /** @type {string[]} */
+    const problemas = []
+    for (const { sql, valores } of vistas) {
+      const plan = db.sqlite.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...valores).map((f) => String(f.detail))
+      // Recorrer una CTE (p. ej. la lista de días de la curva) o una fila constante no lee ninguna tabla.
+      const ctes = new Set(['CONSTANT', ...[...sql.matchAll(/(\w+)(?:\(\w+\))?\s+AS\s+\(/g)].map((m) => m[1])])
+      for (const paso of plan) {
+        const scan = /^SCAN (\w+)/.exec(paso)
+        if (/TEMP B-TREE/.test(paso) || (scan && !pequenas.has(scan[1]) && !ctes.has(scan[1]))) {
+          problemas.push(`${paso} ← ${sql.replace(/\s+/g, ' ').slice(0, 120)}`)
+        }
+      }
+    }
+    assert.deepEqual(problemas, [])
+  })
+
+  test('GET /api/bot con meses de historia: filas leídas acotadas y métricas idénticas a las de la curva completa', async () => {
+    const db = await conDatos()
+    // 100 días más de puntos horarios (un paseo determinista), HODL incluido.
+    const ultima = await db.prepare('SELECT MAX(vela_1h) AS t FROM capital').first('t')
+    /** @type {{ t: number, valor: number, saldo: number, hodl: number|null }[]} */
+    const extra = []
+    let valor = 10_000
+    for (let i = 1; i <= 100 * 24; i++) {
+      valor *= 1 + Math.sin(i * 1.7) * 0.01
+      extra.push({ t: ultima + i * HORA, valor, saldo: valor / 2, hodl: valor * 0.9 })
+    }
+    for (const p of extra) {
+      await guardarCapital(db, { simulacionId: 1, vela: p.t, valorCartera: p.valor, saldo: p.saldo, valorHodl: p.hodl })
+    }
+    const curvaCompleta = (await db.prepare('SELECT vela_1h, valor_cartera, saldo, valor_hodl FROM capital ORDER BY vela_1h').all())
+      .results.map((c) => ({ t: c.vela_1h, valor: c.valor_cartera, saldo: c.saldo, hodl: c.valor_hodl }))
+    /** @type {any} */
+    let r
+    const vistas = await espiarSql(async () => { r = await pedir(db, '/api/bot') })
+    assert.equal(r.estado, 200)
+    const filasLeidas = vistas.reduce((s, v) => s + v.filas, 0)
+    assert.ok(filasLeidas < 30 * 24 + 100 + 50, `${filasLeidas} filas devueltas por D1 para ${curvaCompleta.length} puntos de capital`)
+    assert.deepEqual(r.cuerpo.curva, submuestrearCurva(curvaCompleta), 'misma curva que antes: horaria 30 días y diaria antes')
+    // Métricas: las de la curva completa, bit a bit (la PWA no nota la diferencia).
+    const sim = await db.prepare('SELECT * FROM simulaciones WHERE id = 1').first()
+    const ops = (await db.prepare('SELECT lado, simbolo, comision, deslizamiento, pnl_neto FROM operaciones ORDER BY id').all()).results
+    const esperadas = calcularMetricas({
+      capitalInicial: sim.capital_inicial, saldo: sim.saldo,
+      abiertas: r.cuerpo.abiertas.map((/** @type {any} */ p) => ({ unidades: p.unidades, coste: p.coste, precioActual: p.precioActual })),
+      operaciones: ops.map((o) => ({ tipo: o.lado, simbolo: o.simbolo, comision: o.comision, deslizamiento: o.deslizamiento, pnlNeto: o.pnl_neto ?? undefined })),
+      curva: curvaCompleta,
+    })
+    assert.deepEqual(r.cuerpo.metricas, JSON.parse(JSON.stringify(esperadas)))
+    assert.ok(r.cuerpo.metricas.drawdownMaximo > 0)
+  })
+
+  test('GET /api/bot: precio actual de cada posición = precio de su última decisión con precio', async () => {
+    const db = await conDatos()
+    const r = await pedir(db, '/api/bot')
+    for (const p of r.cuerpo.abiertas) {
+      const precio = await db.prepare(
+        'SELECT precio FROM decisiones WHERE simbolo = ? AND precio IS NOT NULL ORDER BY vela_1h DESC LIMIT 1',
+      ).bind(p.simbolo).first('precio')
+      assert.equal(p.precioActual, precio, p.simbolo)
+    }
+  })
+})
+
 describe('utilidades de la API', () => {
   test('primeraFrase corta en el primer . ! ? seguido de espacio, sin partir decimales', () => {
     assert.equal(primeraFrase('Sube 1.5 puntos. Luego baja.'), 'Sube 1.5 puntos.')
@@ -296,5 +400,19 @@ describe('utilidades de la API', () => {
     assert.ok(antiguos.every((p) => (p.t + HORA) % dia === 0), 'último punto de cada día')
     assert.equal(antiguos.length, 9)
     assert.deepEqual(submuestrearCurva([]), [])
+  })
+
+  test('limitarCurva: con más de 2000 puntos deja como mucho CURVA_MAXIMA, con el primero y el último', () => {
+    const puntos = (/** @type {number} */ n) => Array.from({ length: n }, (_, i) => ({ t: i * HORA, valor: i, saldo: i, hodl: null }))
+    assert.equal(CURVA_MAXIMA, 1000)
+    const corta = puntos(2000)
+    assert.equal(limitarCurva(corta), corta, 'hasta 2000 puntos no se toca')
+    for (const n of [2001, 2500, 35_000]) {
+      const r = limitarCurva(puntos(n))
+      assert.ok(r.length <= CURVA_MAXIMA && r.length >= CURVA_MAXIMA - 1, `${n} → ${r.length}`)
+      assert.equal(r[0].t, 0)
+      assert.equal(r.at(-1)?.t, (n - 1) * HORA)
+      assert.ok(r.every((p, i) => i === 0 || p.t > r[i - 1].t), 'orden creciente y sin repetidos')
+    }
   })
 })
