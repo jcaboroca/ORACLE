@@ -58,7 +58,8 @@ ORACLE/                       PWA en jcaboroca.github.io/ORACLE
 │  ├─ estrategia-v1.js        parámetros y puntuación → señal
 │  ├─ bot.js                  transición de estado de la cartera (puro: estado + velas + señal → acciones)
 │  ├─ metricas.js             rentabilidad, drawdown, ganadoras/perdedoras, HODL…
-│  └─ lexico.js               análisis de titulares sin IA (fallback)
+│  ├─ hora.js                 paso horario compartido (Worker y backtest)
+│  └─ lexico.js               análisis de titulares sin IA (fallback; se crea en el plan 2)
 ├─ worker/
 │  ├─ wrangler.toml           2 crons, binding D1, vars; secrets aparte
 │  ├─ migrations/             esquema D1
@@ -232,7 +233,12 @@ Solo en extremos, a la contra: valor < 20 → +0,5; > 80 → −0,5; resto 0.
 | COMPRAR (no cumple algún requisito) | Nada, registrada como no ejecutada con motivo | Nada |
 | MANTENER | Nada | Nada |
 | VENDER | Nada, registrada como no ejecutada (`sin_posicion`) | Cierra todas las unidades |
-| SIN_DATOS / datos desactualizados | Nada (`datos_desactualizados`) | Nada; los stops sí se siguen comprobando con las velas que lleguen |
+| SIN_DATOS | Nada (`sin_datos`) | Nada; los stops sí se siguen comprobando con las velas que lleguen |
+| Datos desactualizados | Nada (`datos_desactualizados`) | Nada; los stops sí se siguen comprobando con las velas que lleguen |
+
+Vocabulario de `decisiones.motivo`: `abierta`, `cerrada`, `mantener` (o el motivo de la
+señal), `sin_posicion`, `ya_en_posicion`, `confianza_baja`, `saldo_insuficiente`,
+`datos_desactualizados`, `sin_datos`, `enfriamiento`, `cerrada_por_stop`.
 
 ### 7.3 Precios
 
@@ -295,8 +301,9 @@ a partir de las filas de D1.
   defecto los últimos 2 años.
 - Descarga el histórico 1H/4H/1D USDT y 1H EUR de Binance (paginado), y el histórico de
   Fear & Greed. Cachea en `scripts/.cache/` (ignorado por git).
-- Recorre hora a hora llamando a **los mismos** `core/estrategia-v1` y `core/bot` que el
-  Worker, con ventanas de 500 velas (igual que en vivo).
+- Recorre hora a hora llamando a **la misma** `ejecutarHora` de `core/hora.js` (que usa
+  `core/estrategia-v1` y `core/bot`) que el Worker, con ventanas de 500 velas (igual que
+  en vivo).
 - **Sin información futura**: en la hora t solo se ven velas cuyo cierre es ≤ t.
 - **Limitación declarada**: no hay histórico gratuito de titulares, y el de long/short y
   open interest es de ~30 días. El backtest evalúa la variante **técnico + Fear & Greed**
@@ -343,6 +350,7 @@ CREATE TABLE posiciones (
   vela_entrada INTEGER NOT NULL,
   precio_entrada REAL NOT NULL,
   unidades REAL NOT NULL CHECK (unidades > 0),
+  coste REAL NOT NULL,                    -- euros que salieron del saldo al abrir, comisión incluida (Posicion.coste)
   stop_loss REAL NOT NULL,
   take_profit REAL NOT NULL,
   vela_salida INTEGER,
@@ -366,6 +374,7 @@ CREATE TABLE operaciones (
   deslizamiento REAL NOT NULL,
   motivo TEXT NOT NULL,
   saldo_tras REAL NOT NULL,
+  pnl_neto REAL,                          -- solo en ventas: importe − comisión − coste de la posición
   estrategia_version TEXT NOT NULL,
   creada_en INTEGER NOT NULL,
   UNIQUE (posicion_id, lado)
@@ -380,8 +389,10 @@ CREATE TABLE decisiones (
   indice_confianza REAL,
   puntuacion REAL,
   accion TEXT NOT NULL,                   -- abrir | cerrar | ninguna
-  motivo TEXT NOT NULL,                   -- p. ej. sin_posicion, confianza_baja, saldo_insuficiente,
-                                          --      datos_desactualizados, enfriamiento, ya_en_posicion
+  motivo TEXT NOT NULL,                   -- abierta | cerrada | mantener (o el motivo de la señal) |
+                                          -- sin_posicion | ya_en_posicion | confianza_baja |
+                                          -- saldo_insuficiente | datos_desactualizados | sin_datos |
+                                          -- enfriamiento | cerrada_por_stop
   precio REAL,
   desglose_json TEXT NOT NULL,
   estrategia_version TEXT NOT NULL,
@@ -440,6 +451,16 @@ CREATE TABLE intentos_pin (
   bloqueado_hasta INTEGER
 );
 ```
+
+**Reconstrucción del estado del bot.** El `Estado` de `core/bot.js` se reconstruye desde D1
+sin pérdida: `Estado.saldo` = `simulaciones.saldo`; `Estado.posiciones` = filas `abierta`
+de `posiciones` (`velaEntrada` = `vela_entrada`, `precioEntrada` = `precio_entrada`,
+`unidades`, `coste`, `stopLoss` = `stop_loss`, `takeProfit` = `take_profit`);
+`Estado.ultimaRevisada[simbolo]` = `progreso.ultima_vela_revisada`;
+`Estado.enfriamientoHasta[simbolo]` = MAX(`vela_salida`) + 4 h de las posiciones cerradas
+con `motivo_salida = 'stop_loss'`. Las métricas se calculan desde `operaciones` (con
+`pnl_neto` en las ventas). El Worker (plan 2) debe usar `ejecutarHora` de `core/hora.js`
+para que sus decisiones sean idénticas a las del backtest.
 
 Purga: el cron de noticias borra titulares > 7 días y ejecuciones > 30 días.
 
