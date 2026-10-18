@@ -20,6 +20,18 @@ import { HORA, cerradasHasta, esFresca } from './velas.js'
 
 export const VERSION = 'v1'
 
+/** Parámetros del bot de paper trading con esta estrategia (§7.1). */
+export const PARAMETROS_BOT = Object.freeze({
+  comision: 0.001,
+  deslizamiento: 0.0005,
+  confianzaMinima: 0.6,
+  fraccionPosicion: 0.2,
+  ordenMinima: 10,
+  multStopLoss: 1.5,
+  multTakeProfit: 2.5,
+  enfriamientoHoras: 4,
+})
+
 export const PARAMETROS = Object.freeze({
   pesos: Object.freeze({ tecnico: 0.6, derivados: 0.2, noticias: 0.15, fng: 0.05 }),
   pesosTimeframe: Object.freeze({ '1d': 0.5, '4h': 0.3, '1h': 0.2 }),

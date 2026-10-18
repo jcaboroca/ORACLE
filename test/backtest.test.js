@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { ejecutarBacktest } from '../core/backtest.js'
+import * as v1 from '../core/estrategia-v1.js'
 import { HORA } from '../core/velas.js'
 import { serie } from './ayudantes.js'
 
@@ -33,7 +34,7 @@ const fng = Array.from({ length: 400 }, (_, i) => ({ t: INICIO - 300 * DIA + i *
 describe('ejecutarBacktest', () => {
   const desde = INICIO
   const hasta = INICIO + 40 * DIA
-  const r = ejecutarBacktest({ series, fng, desde, hasta })
+  const r = ejecutarBacktest({ series, fng, desde, hasta, estrategia: v1 })
 
   test('una evaluación por hora, en el minuto 3, con comprar y mantener desde el inicio', () => {
     assert.equal(Object.values(r.decisiones).reduce((s, n) => s + n, 0), 40 * 24 * 2)
@@ -44,9 +45,20 @@ describe('ejecutarBacktest', () => {
     assert.equal(r.variante, 'tecnico+fng')
     assert.equal(r.version, 'v1')
   })
+  test('los parámetros publicados son los de la estrategia recibida', () => {
+    assert.equal(r.parametros.estrategia, v1.PARAMETROS)
+    assert.equal(r.parametros.bot, v1.PARAMETROS_BOT)
+    const otra = { ...v1, VERSION: 'vprueba', PARAMETROS_BOT: Object.freeze({ ...v1.PARAMETROS_BOT, fraccionPosicion: 0.1 }) }
+    const r2 = ejecutarBacktest({ series, fng, desde, hasta, estrategia: otra })
+    assert.equal(r2.version, 'vprueba')
+    assert.equal(r2.parametros.bot, otra.PARAMETROS_BOT)
+    const compras = r2.operaciones.filter((o) => o.tipo === 'compra')
+    assert.ok(compras.length > 0)
+    assert.ok(compras[0].importe <= 0.1 * 10_000 + 1e-9)
+  })
   test('registra la ventana de velas en los parámetros', () => {
     assert.equal(r.parametros.ventana, 500)
-    assert.equal(ejecutarBacktest({ series, fng, desde, hasta: desde + DIA, ventana: 300 }).parametros.ventana, 300)
+    assert.equal(ejecutarBacktest({ series, fng, desde, hasta: desde + DIA, ventana: 300, estrategia: v1 }).parametros.ventana, 300)
   })
   test('opera y la contabilidad cuadra: valor = saldo + abiertas', () => {
     assert.ok(r.metricas.operaciones > 0)
@@ -65,7 +77,7 @@ describe('ejecutarBacktest', () => {
       '1h': alterar(s['1h']), '4h': alterar(s['4h']), '1d': alterar(s['1d']), eur: alterar(s.eur),
     }]))
     const fngAlterado = fng.map((f) => (f.t > corte ? { ...f, valor: 100 - f.valor } : f))
-    const r2 = ejecutarBacktest({ series: alteradas, fng: fngAlterado, desde, hasta })
+    const r2 = ejecutarBacktest({ series: alteradas, fng: fngAlterado, desde, hasta, estrategia: v1 })
     assert.deepEqual(r2, r)
   })
 })

@@ -228,6 +228,47 @@ describe('stops', () => {
   })
 })
 
+describe('parámetros inyectables', () => {
+  test('pasoMoneda usa los parámetros recibidos en lugar de los de por defecto', () => {
+    const parametros = { ...PARAMETROS_BOT, comision: 0, deslizamiento: 0, fraccionPosicion: 0.5, multStopLoss: 3, multTakeProfit: 4 }
+    const r = pasoMoneda(estadoInicial(10_000), {
+      simbolo: 'BTC', velasEur: [vela(T, plana(100))], senal: senal(), ahora: AHORA, valorCartera: 10_000,
+    }, parametros)
+    const [compra] = r.eventos
+    assert.equal(compra.importe, 5000)
+    assert.equal(compra.comision, 0)
+    assert.equal(compra.precio, 100)
+    cerca(/** @type {number} */ (compra.stopLoss), 100 * (1 - 3 * 0.02))
+    cerca(/** @type {number} */ (compra.takeProfit), 100 * (1 + 4 * 0.02))
+  })
+  test('confianza mínima y enfriamiento salen de los parámetros', () => {
+    const parametros = { ...PARAMETROS_BOT, confianzaMinima: 0.8, enfriamientoHoras: 1 }
+    const r = pasoMoneda(estadoInicial(10_000), {
+      simbolo: 'BTC', velasEur: [vela(T, plana(100))], senal: senal({ indiceConfianza: 0.75 }), ahora: AHORA, valorCartera: 10_000,
+    }, parametros)
+    assert.equal(r.decision.motivo, 'confianza_baja')
+    const e = conPosicion()
+    const sl = e.posiciones.BTC.stopLoss
+    const r1 = pasoMoneda(e, {
+      simbolo: 'BTC', velasEur: [vela(T + HORA, { o: 100, h: 100, l: sl - 1, c: 99 })], senal: senal(), ahora: AHORA + HORA, valorCartera: 10_000,
+    }, { ...PARAMETROS_BOT, enfriamientoHoras: 1 })
+    assert.equal(r1.estado.enfriamientoHasta.BTC, T + 2 * HORA)
+  })
+  test('las ventas aplican la comisión y el deslizamiento de los parámetros', () => {
+    const e = conPosicion()
+    const r = pasoMoneda(e, {
+      simbolo: 'BTC', velasEur: [vela(T + HORA, plana(101))], senal: senal({ veredicto: 'VENDER' }), ahora: AHORA + HORA, valorCartera: 10_000,
+    }, { ...PARAMETROS_BOT, comision: 0.002, deslizamiento: 0 })
+    const [venta] = r.eventos
+    assert.equal(venta.precio, 101)
+    cerca(venta.comision, venta.importe * 0.002)
+  })
+  test('crearHodl usa los costes recibidos', () => {
+    const u = crearHodl(1000, { BTC: 100, ETH: 10 }, { ...PARAMETROS_BOT, comision: 0, deslizamiento: 0 })
+    assert.deepEqual(u, { BTC: 5, ETH: 50 })
+  })
+})
+
 describe('valoración y comprar y mantener', () => {
   test('valorCartera usa precios actuales y, si faltan, el de entrada', () => {
     const e = conPosicion()

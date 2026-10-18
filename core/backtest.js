@@ -1,23 +1,24 @@
 // @ts-check
 // Backtest hora a hora con el mismo paso horario que el Worker (core/hora.js). Solo ve velas cerradas.
-import { PARAMETROS_BOT, estadoInicial } from './bot.js'
-import { PARAMETROS, VERSION } from './estrategia-v1.js'
+import { estadoInicial } from './bot.js'
 import { ejecutarHora } from './hora.js'
 import { calcularMetricas, metricasPorMoneda } from './metricas.js'
 import { HORA } from './velas.js'
 
 /** @typedef {import('./velas.js').Vela} Vela */
 /** @typedef {{ '1h': Vela[], '4h': Vela[], '1d': Vela[], eur: Vela[] }} SerieMoneda */
+/** @typedef {import('./hora.js').Estrategia} Estrategia */
 
 const MINUTO_CRON = 3 * 60_000
 const DIA = 24 * HORA
 
 /**
  * @param {{ series: Record<string, SerieMoneda>, fng: { t: number, valor: number }[],
- *   desde: number, hasta: number, capitalInicial?: number, ventana?: number }} entrada
+ *   desde: number, hasta: number, capitalInicial?: number, ventana?: number, estrategia: Estrategia }} entrada
  *   desde/hasta en ms; se evalúa cada hora en punto + 3 min, como el cron.
+ *   estrategia: módulo de core/estrategias.js.
  */
-export function ejecutarBacktest({ series, fng, desde, hasta, capitalInicial = 10_000, ventana = 500 }) {
+export function ejecutarBacktest({ series, fng, desde, hasta, capitalInicial = 10_000, ventana = 500, estrategia }) {
   const monedas = Object.keys(series)
   /** @type {Record<string, Record<keyof SerieMoneda, number>>} */
   const punteros = Object.fromEntries(monedas.map((m) => [m, { '1h': 0, '4h': 0, '1d': 0, eur: 0 }]))
@@ -62,6 +63,7 @@ export function ejecutarBacktest({ series, fng, desde, hasta, capitalInicial = 1
       }),
       titulares: [],
       fng: valorFng,
+      estrategia,
     })
     estado = hora.estado
     hodl = hora.hodl
@@ -84,9 +86,9 @@ export function ejecutarBacktest({ series, fng, desde, hasta, capitalInicial = 1
     tipo: o.tipo, simbolo: o.simbolo, comision: o.comision, deslizamiento: o.deslizamiento, pnlNeto: o.pnlNeto,
   }))
   return {
-    version: VERSION,
+    version: estrategia.VERSION,
     variante: 'tecnico+fng',
-    parametros: { estrategia: PARAMETROS, bot: PARAMETROS_BOT, ventana },
+    parametros: { estrategia: estrategia.PARAMETROS, bot: estrategia.PARAMETROS_BOT, ventana },
     desde,
     hasta,
     capitalInicial,

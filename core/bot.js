@@ -29,7 +29,12 @@ import { HORA, cerradasHasta } from './velas.js'
  * @typedef {{ veredicto: string, puntuacion: number|null, indiceConfianza: number|null,
  *   atrPct: number|null, fresca: boolean, motivo: string|null }} SenalBot
  */
+/**
+ * @typedef {{ comision: number, deslizamiento: number, confianzaMinima: number, fraccionPosicion: number,
+ *   ordenMinima: number, multStopLoss: number, multTakeProfit: number, enfriamientoHoras: number }} ParametrosBot
+ */
 
+/** Parámetros por defecto (los de la estrategia v1). Cada estrategia publica los suyos. */
 export const PARAMETROS_BOT = Object.freeze({
   comision: 0.001,
   deslizamiento: 0.0005,
@@ -68,10 +73,10 @@ export function velaDeDecision(ahora) {
  * @param {Vela} v
  * @param {number} base precio de salida antes de deslizamiento
  * @param {'senal'|'stop_loss'|'take_profit'} motivo
+ * @param {ParametrosBot} p
  * @returns {Evento}
  */
-function cerrar(estado, pos, v, base, motivo) {
-  const p = PARAMETROS_BOT
+function cerrar(estado, pos, v, base, motivo, p) {
   const precio = base * (1 - p.deslizamiento)
   const importe = pos.unidades * precio
   const comision = importe * p.comision
@@ -104,10 +109,11 @@ export function salidaEnVela(pos, v) {
  * @param {Estado} estadoPrevio
  * @param {{ simbolo: string, velasEur: Vela[], senal: SenalBot, ahora: number, valorCartera: number }} entrada
  *   velasEur: velas 1H EUR ordenadas; se descarta la que siga abierta en `ahora`.
+ * @param {ParametrosBot} [parametros] los de la estrategia en uso
  * @returns {{ estado: Estado, eventos: Evento[], decision: Decision }}
  */
-export function pasoMoneda(estadoPrevio, { simbolo, velasEur: todasEur, senal, ahora, valorCartera: valor }) {
-  const p = PARAMETROS_BOT
+export function pasoMoneda(estadoPrevio, { simbolo, velasEur: todasEur, senal, ahora, valorCartera: valor }, parametros = PARAMETROS_BOT) {
+  const p = parametros
   // La vela en curso no cuenta: si se revisara ahora, su cierre posterior nunca se comprobaría.
   const velasEur = cerradasHasta(todasEur, ahora)
   /** @type {Estado} */
@@ -125,7 +131,7 @@ export function pasoMoneda(estadoPrevio, { simbolo, velasEur: todasEur, senal, a
       if (v.inicio <= abierta.velaEntrada) continue
       const salida = salidaEnVela(abierta, v)
       if (salida) {
-        eventos.push(cerrar(estado, abierta, v, salida.base, salida.motivo))
+        eventos.push(cerrar(estado, abierta, v, salida.base, salida.motivo, p))
         cerradaPorStop = true
         break
       }
@@ -148,7 +154,7 @@ export function pasoMoneda(estadoPrevio, { simbolo, velasEur: todasEur, senal, a
 
   if (senal.veredicto === 'VENDER') {
     if (!posicion) return { estado, eventos, decision: decidir('ninguna', cerradaPorStop ? 'cerrada_por_stop' : 'sin_posicion') }
-    eventos.push(cerrar(estado, posicion, ultima, ultima.cierre, 'senal'))
+    eventos.push(cerrar(estado, posicion, ultima, ultima.cierre, 'senal', p))
     return { estado, eventos, decision: decidir('cerrar', 'cerrada') }
   }
   if (senal.veredicto !== 'COMPRAR') {
@@ -185,10 +191,11 @@ export function pasoMoneda(estadoPrevio, { simbolo, velasEur: todasEur, senal, a
  * Comprar y mantener: capital a partes iguales entre las monedas, con costes.
  * @param {number} capital
  * @param {Record<string, number>} precios
+ * @param {ParametrosBot} [parametros] solo se usan comision y deslizamiento
  * @returns {Record<string, number>} unidades por moneda
  */
-export function crearHodl(capital, precios) {
-  const p = PARAMETROS_BOT
+export function crearHodl(capital, precios, parametros = PARAMETROS_BOT) {
+  const p = parametros
   const monedas = Object.keys(precios)
   /** @type {Record<string, number>} */
   const unidades = {}

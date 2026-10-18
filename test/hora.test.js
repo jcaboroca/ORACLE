@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { PARAMETROS_BOT, crearHodl, estadoInicial, valorHodl } from '../core/bot.js'
+import * as v1 from '../core/estrategia-v1.js'
 import { ejecutarHora } from '../core/hora.js'
 import { HORA } from '../core/velas.js'
 import { serie } from './ayudantes.js'
@@ -35,8 +36,17 @@ function moneda(simbolo, base, { sinEur = false } = {}) {
 const precioEur = (m) => m.velasEur[m.velasEur.length - 1].cierre
 
 const base = () => ({
-  estado: estadoInicial(10_000), hodl: null, capitalInicial: 10_000, ahora: AHORA, titulares: [], fng: null,
+  estado: estadoInicial(10_000), hodl: null, capitalInicial: 10_000, ahora: AHORA, titulares: [], fng: null, estrategia: v1,
 })
+
+/** Estrategia de prueba: siempre COMPRAR, con parámetros de bot propios. */
+const falsa = {
+  ...v1,
+  VERSION: 'vprueba',
+  PARAMETROS_BOT: Object.freeze({ ...PARAMETROS_BOT, comision: 0, deslizamiento: 0, fraccionPosicion: 0.1 }),
+  /** @param {Parameters<typeof v1.calcularSenal>[0]} e */
+  calcularSenal: (e) => ({ ...v1.calcularSenal(e), version: 'vprueba', veredicto: /** @type {const} */ ('COMPRAR'), indiceConfianza: 0.9, motivo: null }),
+}
 
 describe('ejecutarHora', () => {
   test('dimensiona todas las monedas con la misma foto de la cartera tomada antes del bucle', () => {
@@ -84,11 +94,23 @@ describe('ejecutarHora', () => {
     cerca(r.punto.valor, esperado)
   })
 
+  test('usa la señal y los parámetros de bot de la estrategia recibida, también para el HODL', () => {
+    const monedas = [moneda('BTC', 100), moneda('ETH', 10)]
+    const r = ejecutarHora({ ...base(), estrategia: falsa, monedas })
+    assert.ok(r.senales.every((s) => s.version === 'vprueba'))
+    const compras = r.eventos.filter((e) => e.tipo === 'compra')
+    assert.deepEqual(compras.map((e) => e.importe), [1000, 1000])
+    assert.ok(compras.every((e) => e.comision === 0))
+    const precios = { BTC: precioEur(monedas[0]), ETH: precioEur(monedas[1]) }
+    assert.deepEqual(r.hodl, crearHodl(10_000, precios, falsa.PARAMETROS_BOT))
+  })
+
   test('no muta sus entradas', () => {
     const entrada = { ...base(), hodl: { BTC: 1, ETH: 2 }, monedas: [moneda('BTC', 100), moneda('ETH', 10)] }
-    const copia = structuredClone(entrada)
+    const { estrategia: _, ...datos } = entrada
+    const copia = structuredClone(datos)
     const r = ejecutarHora(entrada)
     assert.ok(r.eventos.length > 0)
-    assert.deepEqual(entrada, copia)
+    assert.deepEqual(datos, copia)
   })
 })

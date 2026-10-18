@@ -1,11 +1,12 @@
 // @ts-check
-// npm run backtest -- [--desde AAAA-MM-DD] [--hasta AAAA-MM-DD] [--monedas BTC,ETH] [--capital 10000]
+// npm run backtest -- [--estrategia v1] [--desde AAAA-MM-DD] [--hasta AAAA-MM-DD] [--monedas BTC,ETH] [--capital 10000]
 // Descarga histórico real de Binance y Fear & Greed (con caché local) y ejecuta core/backtest.js.
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { ejecutarBacktest } from '../core/backtest.js'
+import { ESTRATEGIA_ACTIVA, estrategia as obtenerEstrategia } from '../core/estrategias.js'
 import { HORA, desdeBinance } from '../core/velas.js'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -19,8 +20,10 @@ const { values } = parseArgs({
     hasta: { type: 'string' },
     monedas: { type: 'string', default: 'BTC,ETH,SOL,BNB,XRP' },
     capital: { type: 'string', default: '10000' },
+    estrategia: { type: 'string', default: ESTRATEGIA_ACTIVA },
   },
 })
+const estrategia = obtenerEstrategia(values.estrategia)
 const hasta = values.hasta ? Date.parse(`${values.hasta}T00:00:00Z`) : Math.floor(Date.now() / HORA) * HORA
 const desde = values.desde ? Date.parse(`${values.desde}T00:00:00Z`) : hasta - 730 * DIA
 const monedas = values.monedas.split(',').map((m) => m.trim().toUpperCase())
@@ -80,7 +83,7 @@ async function descargarFng() {
   return json.data.map((d) => ({ t: Number(d.timestamp) * 1000, valor: Number(d.value) })).sort((a, b) => a.t - b.t)
 }
 
-console.log(`Backtest v1 · ${new Date(desde).toISOString().slice(0, 10)} → ${new Date(hasta).toISOString().slice(0, 10)} · ${monedas.join(', ')}`)
+console.log(`Backtest ${estrategia.VERSION} · ${new Date(desde).toISOString().slice(0, 10)} → ${new Date(hasta).toISOString().slice(0, 10)} · ${monedas.join(', ')}`)
 /** @type {Record<string, import('../core/backtest.js').SerieMoneda>} */
 const series = {}
 for (const m of monedas) {
@@ -96,7 +99,7 @@ for (const m of monedas) {
 const fng = await descargarFng()
 
 const inicioCalculo = Date.now()
-const resultado = ejecutarBacktest({ series, fng, desde, hasta, capitalInicial })
+const resultado = ejecutarBacktest({ series, fng, desde, hasta, capitalInicial, estrategia })
 const salida = {
   generadoEn: new Date().toISOString(),
   aviso: 'Simulación con datos históricos. Variante técnico + Fear & Greed: sin noticias ni derivados (no hay histórico gratuito fiable). No es asesoramiento financiero ni garantía de beneficio.',
