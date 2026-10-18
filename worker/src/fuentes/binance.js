@@ -1,13 +1,11 @@
 // @ts-check
 // Velas de Binance desde el mirror público data-api.binance.vision. Cada fila se valida mientras se convierte
 // (una sola pasada: el parseo es lo que más CPU gasta de la ejecución de mercado, spec §9).
-import { cerradasHasta } from '../../../core/velas.js'
+import { VENTANA, cerradasHasta } from '../../../core/velas.js'
 
 /** @typedef {import('../../../core/velas.js').Vela} Vela */
 
 export const BINANCE = 'https://data-api.binance.vision/api/v3/klines'
-/** Velas cerradas que ve la estrategia, igual que la ventana del backtest (core/backtest.js). */
-export const VENTANA = 500
 /** Binance incluye la vela en curso: se piden VENTANA + 1 para que queden VENTANA cerradas. */
 export const LIMITE_VELAS = VENTANA + 1
 

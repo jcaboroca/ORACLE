@@ -2,7 +2,7 @@
 // Escenario sintético de varias horas para los tests del Worker (nunca se usa en producción):
 // tendencia alcista limpia en USDT (la estrategia v1 da COMPRAR con confianza 0,75) y, en EUR,
 // un desplome de BTC en la vela CIERRE (stop-loss) y un pico de ETH en CIERRE + 2 h (take-profit).
-import { HORA } from '../../core/velas.js'
+import { HORA, VENTANA } from '../../core/velas.js'
 import { serie } from '../../test/ayudantes.js'
 import { GEMINI, GROQ } from '../src/fuentes/llm.js'
 import { aFilasBinance, fixtureJson, simularFetch } from './ayudantes.js'
@@ -23,7 +23,7 @@ function seriesDe(base) {
     duracion, inicio: CIERRE - previas * duracion,
   })
   return {
-    // Más de 501 velas por serie: así la ventana de 500 velas cerradas del backtest recorta de verdad.
+    // Más de VENTANA + 1 velas por serie: así la ventana de velas cerradas del backtest recorta de verdad.
     '1h': subida(HORA, 600),
     '4h': subida(4 * HORA, 600),
     '1d': subida(24 * HORA, 600),
@@ -49,10 +49,10 @@ export function crearEscenario() {
  * @param {number} ahora
  * @param {number} [limite]
  */
-export const servidasEn = (velas, ahora, limite = 500) => velas.filter((v) => v.inicio < ahora).slice(-limite)
+export const servidasEn = (velas, ahora, limite = VENTANA + 1) => velas.filter((v) => v.inicio < ahora).slice(-limite)
 
 /**
- * Entradas de core/hora.js para `ahora` con las ventanas de core/backtest.js: las 500 últimas velas USDT
+ * Entradas de core/hora.js para `ahora` con las ventanas de core/backtest.js: las VENTANA últimas velas USDT
  * cerradas y las 24 últimas EUR cerradas, sin derivados.
  * @param {Record<string, Series>} escenario
  * @param {number} ahora
@@ -62,7 +62,7 @@ export function entradasBacktest(escenario, ahora) {
   const ultimas = (velas, n) => velas.filter((v) => v.fin <= ahora).slice(-n)
   return Object.entries(escenario).map(([simbolo, s]) => ({
     simbolo,
-    velas: { '1h': ultimas(s['1h'], 500), '4h': ultimas(s['4h'], 500), '1d': ultimas(s['1d'], 500) },
+    velas: { '1h': ultimas(s['1h'], VENTANA), '4h': ultimas(s['4h'], VENTANA), '1d': ultimas(s['1d'], VENTANA) },
     velasEur: ultimas(s.eur, 24),
     derivados: null,
   }))

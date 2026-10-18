@@ -2,6 +2,11 @@
 
 export const HORA = 3_600_000
 export const DURACION = /** @type {const} */ ({ '1h': HORA, '4h': 4 * HORA, '1d': 24 * HORA })
+/**
+ * Velas cerradas por temporalidad (1h/4h/1d USDT) que ve la estrategia, igual en el Worker y en el backtest.
+ * OKX sirve como mucho 300 velas por petición, incluida la que sigue abierta: quedan 299 cerradas.
+ */
+export const VENTANA = 299
 
 /**
  * @typedef {{ inicio: number, fin: number, apertura: number, maximo: number,

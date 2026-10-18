@@ -59,7 +59,7 @@ describe('ejecutarMercado (cron)', () => {
     await comprobarLibro(db)
   })
 
-  test('hora a hora da exactamente lo mismo que core/hora.js con las ventanas del backtest (500 velas cerradas)', async () => {
+  test('hora a hora da exactamente lo mismo que core/hora.js con las ventanas del backtest (VENTANA = 299 velas cerradas)', async () => {
     const db = crearD1()
     const escenario = crearEscenario()
     await crearSimulacion(db, { capitalInicial: 10_000, version: 'v1', ahora: 0 })

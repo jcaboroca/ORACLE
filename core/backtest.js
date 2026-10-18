@@ -3,7 +3,7 @@
 import { estadoInicial } from './bot.js'
 import { ejecutarHora } from './hora.js'
 import { calcularMetricas, metricasPorMoneda } from './metricas.js'
-import { HORA } from './velas.js'
+import { HORA, VENTANA } from './velas.js'
 
 /** @typedef {import('./velas.js').Vela} Vela */
 /** @typedef {{ '1h': Vela[], '4h': Vela[], '1d': Vela[], eur: Vela[] }} SerieMoneda */
@@ -16,9 +16,9 @@ const DIA = 24 * HORA
  * @param {{ series: Record<string, SerieMoneda>, fng: { t: number, valor: number }[],
  *   desde: number, hasta: number, capitalInicial?: number, ventana?: number, estrategia: Estrategia }} entrada
  *   desde/hasta en ms; se evalúa cada hora en punto + 3 min, como el cron.
- *   estrategia: módulo de core/estrategias.js.
+ *   estrategia: módulo de core/estrategias.js. ventana: velas cerradas por temporalidad (VENTANA, como en vivo).
  */
-export function ejecutarBacktest({ series, fng, desde, hasta, capitalInicial = 10_000, ventana = 500, estrategia }) {
+export function ejecutarBacktest({ series, fng, desde, hasta, capitalInicial = 10_000, ventana = VENTANA, estrategia }) {
   const monedas = Object.keys(series)
   /** @type {Record<string, Record<keyof SerieMoneda, number>>} */
   const punteros = Object.fromEntries(monedas.map((m) => [m, { '1h': 0, '4h': 0, '1d': 0, eur: 0 }]))

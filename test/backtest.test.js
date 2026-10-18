@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { ejecutarBacktest } from '../core/backtest.js'
 import * as v1 from '../core/estrategia-v1.js'
-import { HORA } from '../core/velas.js'
+import { HORA, VENTANA } from '../core/velas.js'
 import { serie } from './ayudantes.js'
 
 const DIA = 24 * HORA
@@ -56,8 +56,9 @@ describe('ejecutarBacktest', () => {
     assert.ok(compras.length > 0)
     assert.ok(compras[0].importe <= 0.1 * 10_000 + 1e-9)
   })
-  test('registra la ventana de velas en los parámetros', () => {
-    assert.equal(r.parametros.ventana, 500)
+  test('por defecto la ventana es la del Worker en vivo (VENTANA = 299 velas cerradas: OKX sirve 300 con la abierta)', () => {
+    assert.equal(VENTANA, 299)
+    assert.equal(r.parametros.ventana, VENTANA)
     assert.equal(ejecutarBacktest({ series, fng, desde, hasta: desde + DIA, ventana: 300, estrategia: v1 }).parametros.ventana, 300)
   })
   test('opera y la contabilidad cuadra: valor = saldo + abiertas', () => {
