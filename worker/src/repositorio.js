@@ -210,6 +210,19 @@ export function iniciarEjecucion(db, tipo, inicio) {
 }
 
 /**
+ * Reserva el análisis manual de forma atómica: inserta la ejecución 'manual' solo si no hay otra que haya
+ * empezado en los últimos `esperaMs` (una sola sentencia: dos peticiones a la vez no pueden pasar las dos).
+ * @param {D1} db @param {number} inicio @param {number} esperaMs
+ * @returns {Promise<number|null>} id de la ejecución, o null si es demasiado pronto
+ */
+export function reservarManual(db, inicio, esperaMs) {
+  return db.prepare(
+    `INSERT INTO ejecuciones (tipo, inicio) SELECT 'manual', ?
+     WHERE NOT EXISTS (SELECT 1 FROM ejecuciones WHERE tipo = 'manual' AND inicio > ?) RETURNING id`,
+  ).bind(inicio, inicio - esperaMs).first('id')
+}
+
+/**
  * @param {D1} db @param {number} id
  * @param {{ fin: number, ok: boolean, detalle: { fallos: string[] } & Record<string, unknown> }} cierre
  */

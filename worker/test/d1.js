@@ -50,11 +50,18 @@ export class Sentencia {
   }
 }
 
+/** Espera a la siguiente vuelta del bucle de eventos, como un viaje de ida y vuelta a D1. */
+const viaje = () => new Promise((resolver) => setImmediate(resolver))
+
 /**
  * Base de datos en memoria con todas las migraciones de worker/migrations aplicadas en orden.
  * `llamadas` cuenta las llamadas a D1 (first/all/run/batch), como las cuenta Cloudflare.
+ * latencia: cada llamada cede el turno antes de ejecutarse (como la red de D1), así las peticiones
+ * en paralelo se intercalan entre llamadas y los tests pueden reproducir carreras de leer-y-escribir.
+ * Cada sentencia o lote sigue siendo atómico, como en D1.
+ * @param {{ latencia?: boolean }} [opciones]
  */
-export function crearD1() {
+export function crearD1({ latencia = false } = {}) {
   const sqlite = new DatabaseSync(':memory:')
   for (const archivo of readdirSync(MIGRACIONES).filter((a) => a.endsWith('.sql')).sort()) {
     sqlite.exec(readFileSync(new URL(archivo, MIGRACIONES), 'utf8'))
@@ -62,6 +69,7 @@ export function crearD1() {
   const d1 = {
     sqlite,
     llamadas: 0,
+    latencia,
     /** @param {string} sql */
     prepare(sql) {
       const base = new Sentencia(sqlite, sql)
@@ -70,6 +78,7 @@ export function crearD1() {
     /** Todas o ninguna: cualquier error revierte el lote completo. @param {Sentencia[]} sentencias */
     async batch(sentencias) {
       d1.llamadas++
+      if (d1.latencia) await viaje()
       sqlite.exec('BEGIN')
       try {
         const resultados = sentencias.map((s) => s.ejecutar())
@@ -93,15 +102,16 @@ export function crearD1() {
 /**
  * Envuelve una sentencia para que first/all/run sumen una llamada (bind conserva el contador).
  * @param {Sentencia} sentencia
- * @param {{ llamadas: number }} d1
+ * @param {{ llamadas: number, latencia: boolean }} d1
  * @returns {Sentencia}
  */
 function contar(sentencia, d1) {
   const envuelta = Object.create(sentencia)
   envuelta.bind = (/** @type {Valor[]} */ ...valores) => contar(sentencia.bind(...valores), d1)
   for (const metodo of /** @type {const} */ (['first', 'all', 'run'])) {
-    envuelta[metodo] = (/** @type {any[]} */ ...args) => {
+    envuelta[metodo] = async (/** @type {any[]} */ ...args) => {
       d1.llamadas++
+      if (d1.latencia) await viaje()
       return /** @type {any} */ (sentencia)[metodo](...args)
     }
   }

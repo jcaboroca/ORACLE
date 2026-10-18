@@ -126,13 +126,14 @@ export async function operar(db, { sim, est, entradas, titulares, fng, ahora }) 
 
 /**
  * @param {{ env: { DB: import('../repositorio.js').D1, MONEDAS?: string } & import('../fuentes/llm.js').EntornoLlm,
- *   fetch: typeof fetch, ahora: number, manual?: boolean }} deps
+ *   fetch: typeof fetch, ahora: number, manual?: boolean, idEjecucion?: number }} deps
  *   manual: true para POST /api/analizar (refresca señales; nunca crea simulaciones ni opera).
+ *   idEjecucion: fila de ejecuciones ya reservada (repo.reservarManual); si no viene, se crea.
  */
-export async function ejecutarMercado({ env, fetch, ahora, manual = false }) {
+export async function ejecutarMercado({ env, fetch, ahora, manual = false, idEjecucion }) {
   const db = env.DB
   const tipo = manual ? 'manual' : 'mercado'
-  const id = await repo.iniciarEjecucion(db, tipo, ahora)
+  const id = idEjecucion ?? await repo.iniciarEjecucion(db, tipo, ahora)
   /** @type {string[]} */
   const fallos = []
   /** @type {string[]} */

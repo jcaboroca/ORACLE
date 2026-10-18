@@ -260,11 +260,14 @@ async function reiniciar({ env, ahora, peticion }) {
 
 /** @param {Contexto} c @returns {Promise<Respuesta>} */
 async function analizar({ env, fetch, ahora }) {
-  const previa = await repo.ultimaEjecucion(env.DB, ['manual'])
-  if (previa && ahora - previa.inicio < ESPERA_ANALIZAR_MS) {
-    throw new ErrorApi(429, 'demasiado_pronto', 'Solo se puede analizar una vez cada 5 minutos.', { hasta: previa.inicio + ESPERA_ANALIZAR_MS })
+  const id = await repo.reservarManual(env.DB, ahora, ESPERA_ANALIZAR_MS)
+  if (id === null) {
+    const previa = await repo.ultimaEjecucion(env.DB, ['manual'])
+    throw new ErrorApi(429, 'demasiado_pronto', 'Solo se puede analizar una vez cada 5 minutos.', {
+      hasta: (previa?.inicio ?? ahora) + ESPERA_ANALIZAR_MS,
+    })
   }
-  const r = await ejecutarMercado({ env, fetch, ahora, manual: true })
+  const r = await ejecutarMercado({ env, fetch, ahora, manual: true, idEjecucion: id })
   if (!r.ejecucion.ok) throw new ErrorApi(502, 'analisis_fallido', r.error ?? 'El análisis falló')
   return { cuerpo: { senales: r.senales.map(aSenalResumen), ejecucion: r.ejecucion } }
 }

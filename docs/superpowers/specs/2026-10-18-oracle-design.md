@@ -131,7 +131,8 @@ Cada ejecución queda en `ejecuciones` (tipo, inicio, fin, ok, detalle de fuente
 
 ### Análisis manual
 `POST /api/analizar` repite los pasos 1-4 del cron de mercado. **Nunca opera.** Limitado
-a 1 vez cada 5 minutos.
+a 1 vez cada 5 minutos, con reserva atómica: la fila `manual` de `ejecuciones` se inserta solo si no
+hay otra en los últimos 5 minutos (una sentencia), así dos peticiones a la vez no analizan las dos.
 
 ## 6. Motor de señales — estrategia v1
 

@@ -280,6 +280,18 @@ describe('rutas con PIN', () => {
     })
     assert.equal((await pedir(db, '/api/analizar', { metodo: 'POST', ahora: ahora + ESPERA_ANALIZAR_MS })).estado, 200)
   })
+
+  test('POST /api/analizar en paralelo: solo uno analiza; el resto, 429 sin descargar nada', async () => {
+    const db = await conDatos()
+    db.latencia = true
+    const ahora = ahoraDe(5) + 20 * 60_000
+    const fetch = fetchEscenario(crearEscenario(), ahora)
+    const respuestas = await Promise.all(Array.from({ length: 5 }, () => pedir(db, '/api/analizar', { metodo: 'POST', ahora, fetch })))
+    assert.deepEqual(respuestas.map((r) => r.estado).sort(), [200, 429, 429, 429, 429])
+    for (const r of respuestas.filter((x) => x.estado === 429)) assert.equal(r.cuerpo.hasta, ahora + ESPERA_ANALIZAR_MS)
+    assert.equal(await db.prepare("SELECT COUNT(*) AS n FROM ejecuciones WHERE tipo = 'manual'").first('n'), 1)
+    assert.equal(fetch.llamadas.filter((l) => l.url.includes('klines')).length, 2 * 4, 'un solo análisis descargó velas')
+  })
 })
 
 /**
