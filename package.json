@@ -1,0 +1,14 @@
+{
+  "name": "oracle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Asistente de trading crypto con bot de paper trading. Simulación: no es asesoramiento financiero.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "backtest": "node scripts/backtest.mjs"
+  }
+}

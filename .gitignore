@@ -1,0 +1,11 @@
+.DS_Store
+node_modules/
+*.log
+.vscode/
+
+# Histórico descargado de Binance para el backtest: se regenera con npm run backtest
+scripts/.cache/
+
+# Caché local de wrangler y secrets de desarrollo
+worker/.wrangler/
+worker/.dev.vars
