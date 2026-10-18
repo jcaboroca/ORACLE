@@ -6,7 +6,7 @@ import { CRON_MERCADO, CRON_NOTICIAS, programado } from '../src/crones.js'
 import worker from '../src/index.js'
 import { simularFetch } from './ayudantes.js'
 import { crearD1 } from './d1.js'
-import { ahoraDe, crearEscenario, fetchEscenario } from './escenario.js'
+import { ahoraDe, crearEscenario, fetchEscenario, sinEspera } from './escenario.js'
 
 const WRANGLER = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8')
 
@@ -31,7 +31,7 @@ describe('index', () => {
     const ahora = ahoraDe(0)
     const noticias = /** @type {any} */ (await programado(CRON_NOTICIAS, { env: { DB: db }, fetch: simularFetch(() => ({ estado: 503, cuerpo: '' })), ahora }))
     assert.equal(noticias.ok, true)
-    const mercado = /** @type {any} */ (await programado(CRON_MERCADO, { env: { DB: db, MONEDAS: 'BTC,ETH' }, fetch: fetchEscenario(crearEscenario(), ahora), ahora }))
+    const mercado = /** @type {any} */ (await programado(CRON_MERCADO, { env: { DB: db, MONEDAS: 'BTC,ETH' }, fetch: fetchEscenario(crearEscenario(), ahora), ahora, esperar: sinEspera }))
     assert.equal(mercado.ejecucion.ok, true)
     const tipos = (await db.prepare('SELECT tipo FROM ejecuciones ORDER BY id').all()).results.map((f) => f.tipo)
     assert.deepEqual(tipos, ['noticias', 'mercado'])

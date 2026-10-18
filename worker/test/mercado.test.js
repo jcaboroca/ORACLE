@@ -9,8 +9,9 @@ import { ESTRATEGIA_ACTIVA } from '../../core/estrategias.js'
 import { ejecutarHora } from '../../core/hora.js'
 import { ejecutarMercado } from '../src/ejecuciones/mercado.js'
 import { cargarEstado, crearSimulacion, obtenerSimulacion, senalesActuales } from '../src/repositorio.js'
+import { cuerposConsumidos } from './ayudantes.js'
 import { crearD1 } from './d1.js'
-import { CIERRE, ahoraDe, crearEscenario, entradasBacktest, fetchEscenario, servidasEn } from './escenario.js'
+import { CIERRE, ahoraDe, crearEscenario, entradasBacktest, fetchEscenario, servidasEn, sinEspera } from './escenario.js'
 
 /** @param {ReturnType<typeof crearD1>|any} db @param {string} [monedas] */
 const entorno = (db, monedas = 'BTC,ETH') => ({ DB: db, MONEDAS: monedas })
@@ -35,7 +36,7 @@ describe('ejecutarMercado (cron)', () => {
     const db = crearD1()
     const escenario = crearEscenario()
     const ahora = ahoraDe(0)
-    const r = await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(escenario, ahora), ahora })
+    const r = await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(escenario, ahora), ahora })
     assert.equal(r.ejecucion.ok, true)
     const sim = await db.prepare('SELECT * FROM simulaciones').first()
     assert.equal(sim.estrategia_version, ESTRATEGIA_ACTIVA)
@@ -68,7 +69,7 @@ describe('ejecutarMercado (cron)', () => {
     let hodl = null
     for (let k = 0; k < 8; k++) {
       const ahora = ahoraDe(k)
-      const r = await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(escenario, ahora), ahora })
+      const r = await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(escenario, ahora), ahora })
       assert.deepEqual(r.repetidas, [])
       const memoria = ejecutarHora({
         estado, hodl, capitalInicial: 10_000, ahora, monedas: entradasBacktest(escenario, ahora), titulares: [], fng: 53, estrategia: v1,
@@ -114,7 +115,7 @@ describe('ejecutarMercado (cron)', () => {
     let hodl = null
     for (let k = 0; k < 3; k++) {
       const ahora = ahoraDe(k)
-      await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(escenario, ahora), ahora })
+      await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(escenario, ahora), ahora })
       const memoria = ejecutarHora({
         estado, hodl, capitalInicial: 10_000, ahora, monedas: entradasBacktest(escenario, ahora), titulares: [], fng: 53, estrategia: v2,
       })
@@ -137,12 +138,12 @@ describe('ejecutarMercado (cron)', () => {
     const db = crearD1()
     const escenario = crearEscenario()
     const ahora = ahoraDe(0)
-    await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(escenario, ahora), ahora })
+    await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(escenario, ahora), ahora })
     const contar = async () => Promise.all(['decisiones', 'operaciones', 'posiciones', 'capital'].map(
       (t) => db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).first('n'),
     ))
     const antes = [...await contar(), await db.prepare('SELECT saldo FROM simulaciones').first('saldo')]
-    const r = await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(escenario, ahora + 60_000), ahora: ahora + 60_000 })
+    const r = await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(escenario, ahora + 60_000), ahora: ahora + 60_000 })
     assert.deepEqual(r.repetidas, ['BTC', 'ETH'])
     assert.deepEqual([...await contar(), await db.prepare('SELECT saldo FROM simulaciones').first('saldo')], antes)
     assert.equal(await db.prepare('SELECT COUNT(*) AS n FROM ejecuciones').first('n'), 2)
@@ -162,7 +163,7 @@ describe('ejecutarMercado (cron)', () => {
       },
     }
     const ahora = ahoraDe(0)
-    const r = await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(escenario, ahora), ahora })
+    const r = await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(escenario, ahora), ahora })
     assert.ok(r.ejecucion.fallos.includes('bot ETH: D1_ERROR: simulado'))
     assert.deepEqual((await filas(base, "SELECT simbolo FROM posiciones WHERE estado = 'abierta'")).map((p) => p.simbolo), ['BTC'])
     assert.deepEqual((await filas(base, 'SELECT simbolo FROM progreso')).map((p) => p.simbolo), ['BTC'])
@@ -174,7 +175,7 @@ describe('ejecutarMercado (cron)', () => {
     await comprobarLibro(base)
 
     const despues = ahoraDe(1)
-    await ejecutarMercado({ env: entorno(base), fetch: fetchEscenario(escenario, despues), ahora: despues })
+    await ejecutarMercado({ esperar: sinEspera, env: entorno(base), fetch: fetchEscenario(escenario, despues), ahora: despues })
     const eth = await filas(base, "SELECT motivo FROM decisiones WHERE simbolo = 'ETH'")
     assert.deepEqual(eth.map((d) => d.motivo), ['abierta'])
     await comprobarLibro(base)
@@ -184,10 +185,10 @@ describe('ejecutarMercado (cron)', () => {
     const db = crearD1()
     const escenario = crearEscenario()
     const ahora = ahoraDe(0)
-    const fetch = fetchEscenario(escenario, ahora, { caidas: ['SOLUSDT', 'SOLEUR'] })
-    const r = await ejecutarMercado({ env: entorno(db, 'BTC,ETH,SOL'), fetch, ahora })
-    assert.ok(r.ejecucion.fallos.includes('velas SOLUSDT 1h: HTTP 500'))
-    assert.ok(r.ejecucion.fallos.includes('velas SOLEUR 1h: HTTP 500'))
+    const fetch = fetchEscenario(escenario, ahora, { caidas: ['SOL-USDT', 'SOL-EUR'] })
+    const r = await ejecutarMercado({ esperar: sinEspera, env: entorno(db, 'BTC,ETH,SOL'), fetch, ahora })
+    assert.ok(r.ejecucion.fallos.includes('velas SOL-USDT 1h: HTTP 500'))
+    assert.ok(r.ejecucion.fallos.includes('velas SOL-EUR 1h: HTTP 500'))
     const sol = await db.prepare("SELECT veredicto, motivo, accion FROM decisiones WHERE simbolo = 'SOL'").first()
     assert.deepEqual(sol, { veredicto: 'SIN_DATOS', motivo: 'sin_datos', accion: 'ninguna' })
     assert.equal((await filas(db, 'SELECT * FROM decisiones')).length, 3)
@@ -201,24 +202,41 @@ describe('ejecutarMercado (cron)', () => {
     await crearSimulacion(db, { capitalInicial: 10_000, version: 'v1', ahora: 0 })
     const ahora = ahoraDe(0)
     // Técnico claramente alcista y funding de +0,06 % por 8 h (derivados −1): v1 manda MANTENER.
-    const premium = { BTCUSDT: { symbol: 'BTCUSDT', lastFundingRate: '0.0006' } }
-    await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(crearEscenario(), ahora, { premium }), ahora })
+    const funding = { 'BTC-USDT-SWAP': '0.0006' }
+    await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(crearEscenario(), ahora, { funding }), ahora })
     const btc = await db.prepare("SELECT veredicto, motivo, accion FROM decisiones WHERE simbolo = 'BTC'").first()
     assert.deepEqual(btc, { veredicto: 'MANTENER', motivo: 'contradiccion_tecnico_derivados', accion: 'ninguna' })
     const eth = await db.prepare("SELECT motivo FROM decisiones WHERE simbolo = 'ETH'").first('motivo')
     assert.equal(eth, 'abierta', 'ETH no tiene funding en la respuesta: derivados ausentes')
   })
 
-  test('presupuesto §9 con 5 monedas: 38 subpeticiones externas y como mucho 17 llamadas a D1', async () => {
+  test('presupuesto §9 con 5 monedas: 38 subpeticiones externas, todas las de mercado a OKX, y como mucho 17 llamadas a D1', async () => {
     const db = crearD1()
     const ahora = ahoraDe(0)
     const fetch = fetchEscenario(crearEscenario(), ahora)
     const env = { ...entorno(db, 'BTC,ETH,SOL,BNB,XRP'), GROQ_API_KEY: 'g', GEMINI_API_KEY: 'k' }
-    await ejecutarMercado({ env, fetch, ahora })
+    await ejecutarMercado({ esperar: sinEspera, env, fetch, ahora })
     assert.equal(fetch.llamadas.length, 20 + 15 + 1 + 2)
-    assert.ok(fetch.llamadas.every((l) => !l.url.endsWith('/fapi/v1/premiumIndex')), 'nunca el premiumIndex de todo el exchange')
-    assert.equal(fetch.llamadas.filter((l) => l.url.includes('EUR&interval=1h&limit=48')).length, 5)
+    assert.equal(fetch.llamadas.filter((l) => l.url.startsWith('https://www.okx.com/')).length, 20 + 15)
+    assert.ok(fetch.llamadas.every((l) => !l.url.includes('binance')), 'Binance no responde desde Cloudflare')
+    assert.equal(fetch.llamadas.filter((l) => l.url.includes('-USDT&bar=') && l.url.endsWith('&limit=300')).length, 15)
+    assert.equal(fetch.llamadas.filter((l) => l.url.includes('-EUR&bar=1H&limit=48')).length, 5)
+    assert.ok(cuerposConsumidos(fetch), 'ningún cuerpo de respuesta queda sin leer o cancelar')
     assert.ok(db.llamadas <= 17, `${db.llamadas} llamadas a D1`)
+  })
+
+  test('OKX limitando (429/50011) en todo: 6 reintentos como mucho (44 subpeticiones), SIN_DATOS y ejecución ok', async () => {
+    const db = crearD1()
+    const ahora = ahoraDe(0)
+    const fetch = fetchEscenario(crearEscenario(), ahora, { limitado: true })
+    const env = { ...entorno(db, 'BTC,ETH,SOL,BNB,XRP'), GROQ_API_KEY: 'g', GEMINI_API_KEY: 'k' }
+    const r = await ejecutarMercado({ esperar: sinEspera, env, fetch, ahora })
+    assert.equal(r.ejecucion.ok, true)
+    assert.equal(fetch.llamadas.length, 20 + 15 + 6 + 1 + 2)
+    assert.ok(fetch.llamadas.length <= 50)
+    assert.ok(r.senales.every((s) => s.veredicto === 'SIN_DATOS'))
+    const detalle = JSON.parse(await db.prepare('SELECT detalle_json FROM ejecuciones').first('detalle_json'))
+    assert.equal(detalle.reintentosOkx, 6)
   })
 })
 
@@ -226,7 +244,7 @@ describe('ejecutarMercado (manual: POST /api/analizar)', () => {
   test('refresca las señales sin crear simulaciones ni operar', async () => {
     const db = crearD1()
     const ahora = ahoraDe(0)
-    const r = await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(crearEscenario(), ahora), ahora, manual: true })
+    const r = await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(crearEscenario(), ahora), ahora, manual: true })
     assert.equal(r.ejecucion.tipo, 'manual')
     assert.equal(r.senales.length, 2)
     for (const t of ['simulaciones', 'decisiones', 'operaciones', 'posiciones', 'capital', 'progreso']) {
@@ -239,7 +257,7 @@ describe('ejecutarMercado (manual: POST /api/analizar)', () => {
     const db = crearD1()
     const sim = await crearSimulacion(db, { capitalInicial: 10_000, version: 'v1', ahora: 0 })
     const ahora = ahoraDe(0)
-    const r = await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(crearEscenario(), ahora), ahora, manual: true })
+    const r = await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(crearEscenario(), ahora), ahora, manual: true })
     assert.ok(r.senales.every((s) => s.veredicto === 'COMPRAR'), 'la señal es de compra y aun así no se abre nada')
     assert.deepEqual(await obtenerSimulacion(db, sim.id), sim)
     assert.equal(await db.prepare('SELECT COUNT(*) AS n FROM decisiones').first('n'), 0)

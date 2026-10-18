@@ -69,7 +69,7 @@ ORACLE/                       PWA en jcaboroca.github.io/ORACLE
 │     ├─ index.js             fetch (API) + scheduled (crons)
 │     ├─ api.js, auth.js
 │     ├─ ejecuciones/         noticias.js, mercado.js
-│     ├─ fuentes/             binance.js, derivados.js, fng.js, rss.js, reddit.js, llm.js
+│     ├─ fuentes/             okx.js, derivados.js, fng.js, rss.js, reddit.js, llm.js, http.js
 │     └─ repositorio.js       todas las consultas D1
 ├─ scripts/
 │  ├─ backtest.mjs            npm run backtest [-- --estrategia vN] → data/backtest-vN.json
@@ -85,19 +85,36 @@ mismo código se ejecuta en el Worker, en el backtest y en los tests.
 
 | Fuente | Endpoint | Clave | Uso |
 |---|---|---|---|
-| Velas USDT (indicadores) | `data-api.binance.vision/api/v3/klines` `{SYM}USDT` 1h/4h/1d, `limit=501` (500 cerradas + la vela en curso, como la ventana del backtest) | No | Señal |
-| Velas EUR (ejecución) | ídem `{SYM}EUR` 1h, `limit=48` (47 cerradas: cambio 24 h y ~2 días de stops pendientes) | No | Precios del bot, stops, valoración |
-| Funding | `fapi.binance.com/fapi/v1/premiumIndex?symbol={SYM}USDT` (1 por moneda: la respuesta de todo el exchange pesa ~200 KB) | No | Derivados |
-| Long/short | `fapi.binance.com/futures/data/globalLongShortAccountRatio` 1h | No | Derivados |
-| Open interest | `fapi.binance.com/futures/data/openInterestHist` 1h, 24 puntos | No | Derivados |
+| Velas USDT (indicadores) | OKX `www.okx.com/api/v5/market/candles?instId={SYM}-USDT`, `bar` = `1H`/`4H`/`1Dutc`, `limit=300` (el máximo de OKX: 299 cerradas + la vela en curso, como la ventana `VENTANA` del backtest) | No | Señal |
+| Velas EUR (ejecución) | ídem `{SYM}-EUR` `1H`, `limit=48` (47 cerradas: cambio 24 h y ~2 días de stops pendientes) | No | Precios del bot, stops, valoración |
+| Funding | OKX `/api/v5/public/funding-rate?instId={SYM}-USDT-SWAP` (`fundingRate` del periodo en curso, fracción por 8 h) | No | Derivados |
+| Long/short | OKX `/api/v5/rubik/stat/contracts/long-short-account-ratio-contract?instId={SYM}-USDT-SWAP&period=1H&limit=1` (cuentas) | No | Derivados |
+| Open interest | OKX `/api/v5/rubik/stat/contracts/open-interest-history?instId={SYM}-USDT-SWAP&period=1H&limit=25` (en monedas, `oiCcy`; cambio = último / el de 24 h antes − 1) | No | Derivados |
 | Fear & Greed | `api.alternative.me/fng/` | No | Ánimo |
 | Noticias | ~14 RSS (los de CryptoTrade) | No | Noticias |
 | Rumores | Reddit r/CryptoCurrency, r/Bitcoin, r/ethereum (`.json`/RSS) | No | Noticias, **best-effort** (Reddit suele bloquear IPs de nube) |
 | LLM | Groq → Gemini (modelo configurable en vars) | Sí, secret | Puntuar titulares + explicar |
 
-`data-api.binance.vision` es el mirror público de datos de mercado; se usa porque el cron
-de Cloudflare puede ejecutarse desde regiones donde `api.binance.com` responde 451. Los
-derivados de `fapi` pueden fallar por la misma razón: son opcionales.
+**Datos en vivo = OKX; histórico del backtest = Binance.** Desde la red de Cloudflare todos los
+dominios de Binance (`data-api.binance.vision`, `api*.binance.com`, `fapi.binance.com`) responden
+403 (comprobado con un Worker de diagnóstico desde MAD); OKX responde. El Worker solo usa OKX
+para el mercado. El backtest (`scripts/backtest.mjs`, en local) sigue descargando el histórico de
+Binance, y los gráficos de la PWA piden las velas a Binance desde el navegador.
+
+- Las velas de OKX llegan de la más reciente a la más antigua y como texto; `fuentes/okx.js` las
+  valida y convierte a `Vela` de core (`fin = inicio + duración`, orden ascendente) en una pasada,
+  y exige velas alineadas a UTC (`inicio` múltiplo de la duración). `1Dutc` es el día UTC, como el
+  `1d` de Binance (`1D` sería el día de Hong Kong); las `4H` ya empiezan en múltiplos de 4 h UTC.
+- Una respuesta HTTP no 2xx o con `code ≠ "0"` es un error con el estado o el código de OKX.
+- **Límite de ritmo.** Las IPs de salida de Cloudflare son compartidas y OKX llegó a responder
+  429 `{"code":"50011"}` en una ráfaga en paralelo. Todas las peticiones a OKX de una ejecución
+  pasan por un cliente con como mucho 4 en vuelo; las «rubik» (long/short y open interest, ~5
+  cada 2 s por IP) van de una en una con 450 ms entre ellas; una respuesta 429/50011 se reintenta
+  **una vez** tras 1,2 s, con un tope de 6 reintentos por ejecución (§9).
+- Los derivados son opcionales: si una petición falla, esa subpuntuación queda ausente (§6.2) y
+  la ejecución sigue.
+- El open interest se toma en monedas (`oiCcy`) y no en USD, para que el cambio de precio no se
+  cuele en el del open interest (la regla de §6.2 los compara por separado).
 
 **Divisas.** Los indicadores se calculan sobre pares USDT (más líquidos). La contabilidad
 del bot es en € y usa pares EUR para precio de entrada/salida, stops y valoración. Los
@@ -406,7 +423,16 @@ a partir de las filas de D1.
   `--capital` como antes.
 - Recorre hora a hora llamando a **la misma** `ejecutarHora` de `core/hora.js` (que recibe
   el módulo de estrategia y usa su `calcularSenal` y sus `PARAMETROS_BOT` con `core/bot`)
-  que el Worker, con ventanas de 500 velas (igual que en vivo).
+  que el Worker, con ventanas de `VENTANA` = 299 velas cerradas por temporalidad (`core/velas.js`,
+  igual que en vivo: OKX sirve como mucho 300 velas, incluida la abierta).
+- **Fuente de datos distinta a la del Worker.** El histórico es de Binance (desde este equipo) y
+  el Worker en vivo usa OKX (§4). La paridad garantizada es de **lógica y de ventana**: el mismo
+  `ejecutarHora` sobre las mismas 299 velas cerradas da las mismas decisiones (test de paridad del
+  Worker con datos sintéticos), no de fuente. Entre exchanges los precios del mismo par difieren
+  poco: en las 299 velas 1H cerradas hasta el 2026-10-18 (medido), los cierres USDT de OKX y Binance
+  difieren una mediana de 0,005-0,012 % (máximo 0,06 %) y los EUR, menos líquidos, 0,01-0,07 %
+  (máximo 0,4 % en BNB-EUR). Basta para cambiar alguna señal que esté justo en un umbral o algún
+  stop rozado; el backtest es orientativo también por eso.
 - **Sin información futura**: en la hora t solo se ven velas cuyo cierre es ≤ t.
 - **Limitación declarada**: no hay histórico gratuito de titulares, y el de long/short y
   open interest es de ~30 días. El backtest evalúa la variante **técnico + Fear & Greed**
@@ -424,12 +450,15 @@ a partir de las filas de D1.
 | KV escrituras: 1.000/día por cuenta (usado por 4 proyectos) | **0**: ORACLE no usa KV | 0 % |
 | D1 escrituras: 100.000/día | ~5 decisiones + ~5 progreso + 1 capital + ~50 titulares/h ≈ 1.700/día; + ~4 filas por petición con PIN (reserva y liberación del intento) ≈ 1.200/día con ~300 peticiones | ~3 % |
 | D1 lecturas: 5 M/día | consultas indexadas y acotadas: ninguna ruta recorre una tabla entera ni ordena aparte (comprobado con `EXPLAIN QUERY PLAN` en los tests); `GET /api/bot` lee ~720 puntos horarios + ~2 filas por día de historia, no la curva ni las decisiones completas | < 1 % |
-| Subpeticiones: 50/invocación | noticias ≈ 19; mercado = 15 velas USDT + 5 EUR + 15 derivados (3 por moneda) + 1 F&G + hasta 2 LLM (Groq, Gemini) = 38 | bajo límite |
-| CPU: 10 ms/invocación | parsing ligero (regex para RSS, sin librerías XML); mercado: ~1,3 MB de JSON de velas (15 × 501 USDT + 5 × 48 EUR) validado y convertido en una sola pasada, funding por moneda en vez de los ~200 KB de todo el exchange; `[observability]` activo para ver la CPU real por invocación en Workers Logs | por invocación: si se excede, solo falla esa ejecución de ORACLE |
+| Subpeticiones: 50/invocación | noticias ≈ 19; mercado = 15 velas USDT + 5 EUR + 15 derivados (funding + 2 rubik por moneda) a OKX + hasta 6 reintentos por límite de ritmo + 1 F&G + hasta 2 LLM (Groq, Gemini) = 38, como mucho 44 | bajo límite |
+| CPU: 10 ms/invocación | parsing ligero (regex para RSS, sin librerías XML); mercado: ~0,5 MB de JSON de velas de OKX (15 × 300 USDT, ~30 KB cada una, + 5 × 48 EUR) validado y convertido en una sola pasada, derivados de ~0,2-3 KB por petición; `[observability]` activo para ver la CPU real por invocación en Workers Logs | por invocación: si se excede, solo falla esa ejecución de ORACLE |
+| Tiempo de reloj (no es CPU) | las 10 peticiones rubik van en serie con 450 ms entre ellas: la ejecución de mercado y `POST /api/analizar` tardan ~5-7 s | sin límite de reloj en crons; aceptable en la petición manual |
 
 Salvaguardas: la PWA solo consulta al abrirse y cada 5 min mientras está visible; las
 velas del gráfico van del navegador a Binance directamente; PIN con bloqueo; sin reintentos
-en bucle. Si la CPU resultara insuficiente, se avisará antes de proponer el plan de pago.
+en bucle (OKX: un reintento por petición limitada y 6 por ejecución como mucho). Todas las
+fuentes leen o cancelan siempre el cuerpo de la respuesta, también en los errores (`fuentes/http.js`):
+un cuerpo sin consumir lo corta Workers («stalled HTTP response») y puede bloquear las demás. Si la CPU resultara insuficiente, se avisará antes de proponer el plan de pago.
 
 ## 10. Persistencia — esquema D1
 
@@ -649,7 +678,8 @@ service worker que cachea solo la estructura de la app (los datos siempre en red
 
 ## 14. Pruebas
 
-`node --test`, sin red, con fixtures reales grabados de Binance, alternative.me y RSS.
+`node --test`, sin red, con fixtures reales grabados de OKX, alternative.me, RSS y Reddit
+(`worker/test/fixtures/`).
 
 - **Indicadores**: valores de referencia conocidos (RSI de Wilder, EMA, MACD, ATR, Bollinger).
 - **Estrategia**: cada fila de las tablas de §6; contradicción en su umbral exacto;

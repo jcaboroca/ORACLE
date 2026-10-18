@@ -2,12 +2,12 @@
 // Ayudantes de los tests del Worker: fetch simulado y fixtures grabados. Solo para tests.
 import { readFileSync } from 'node:fs'
 
-const FIXTURES = new URL('../../test/fixtures/', import.meta.url)
+const FIXTURES = new URL('./fixtures/', import.meta.url)
 
-/** Contenido de test/fixtures/<nombre> como texto. @param {string} nombre */
+/** Contenido de worker/test/fixtures/<nombre> como texto. @param {string} nombre */
 export const fixtureTexto = (nombre) => readFileSync(new URL(nombre, FIXTURES), 'utf8')
 
-/** Contenido de test/fixtures/<nombre> como JSON. @param {string} nombre */
+/** Contenido de worker/test/fixtures/<nombre> como JSON. @param {string} nombre */
 export const fixtureJson = (nombre) => JSON.parse(fixtureTexto(nombre))
 
 /**
@@ -46,12 +46,15 @@ export function simularFetch(responder) {
 export const cuerposConsumidos = (fetch) => fetch.respuestas.length > 0 && fetch.respuestas.every((r) => r.bodyUsed)
 
 /**
- * Velas → filas de /api/v3/klines (mismo formato que devuelve Binance).
+ * Velas → respuesta de /api/v5/market/candles de OKX (mismo formato: textos, la más reciente primero y
+ * confirm "0" en la que aún no ha cerrado en `ahora`).
  * @param {import('../../core/velas.js').Vela[]} velas
+ * @param {number} ahora
  */
-export function aFilasBinance(velas) {
-  return velas.map((v) => [
-    v.inicio, String(v.apertura), String(v.maximo), String(v.minimo), String(v.cierre), String(v.volumen),
-    v.fin - 1, '0', 0, '0', '0', '0',
-  ])
+export function aRespuestaOkx(velas, ahora) {
+  const data = velas.map((v) => [
+    String(v.inicio), String(v.apertura), String(v.maximo), String(v.minimo), String(v.cierre), String(v.volumen),
+    '0', '0', v.fin <= ahora ? '1' : '0',
+  ]).reverse()
+  return { code: '0', msg: '', data }
 }

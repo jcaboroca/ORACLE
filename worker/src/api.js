@@ -36,7 +36,7 @@ export class ErrorApi extends Error {
 
 /**
  * @typedef {{ env: { DB: repo.D1, ORACLE_PIN?: string, MONEDAS?: string, ORIGENES?: string } & import('./fuentes/llm.js').EntornoLlm,
- *   fetch: typeof fetch, ahora: number }} Deps
+ *   fetch: typeof fetch, ahora: number, esperar?: (ms: number) => Promise<void> }} Deps
  * @typedef {Deps & { url: URL, peticion: Request, params: string[] }} Contexto
  * @typedef {{ estado?: number, cuerpo: unknown }} Respuesta
  */
@@ -259,7 +259,7 @@ async function reiniciar({ env, ahora, peticion }) {
 }
 
 /** @param {Contexto} c @returns {Promise<Respuesta>} */
-async function analizar({ env, fetch, ahora }) {
+async function analizar({ env, fetch, ahora, esperar }) {
   const id = await repo.reservarManual(env.DB, ahora, ESPERA_ANALIZAR_MS)
   if (id === null) {
     const previa = await repo.ultimaEjecucion(env.DB, ['manual'])
@@ -267,7 +267,7 @@ async function analizar({ env, fetch, ahora }) {
       hasta: (previa?.inicio ?? ahora) + ESPERA_ANALIZAR_MS,
     })
   }
-  const r = await ejecutarMercado({ env, fetch, ahora, manual: true, idEjecucion: id })
+  const r = await ejecutarMercado({ env, fetch, ahora, manual: true, idEjecucion: id, esperar })
   if (!r.ejecucion.ok) throw new ErrorApi(502, 'analisis_fallido', r.error ?? 'El análisis falló')
   return { cuerpo: { senales: r.senales.map(aSenalResumen), ejecucion: r.ejecucion } }
 }

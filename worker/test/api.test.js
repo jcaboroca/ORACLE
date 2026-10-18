@@ -13,7 +13,7 @@ import { ejecutarMercado } from '../src/ejecuciones/mercado.js'
 import { crearSimulacion, guardarCapital, guardarPuntuaciones, insertarTitulares } from '../src/repositorio.js'
 import { simularFetch } from './ayudantes.js'
 import { Sentencia, crearD1 } from './d1.js'
-import { ahoraDe, crearEscenario, fetchEscenario } from './escenario.js'
+import { ahoraDe, crearEscenario, fetchEscenario, sinEspera } from './escenario.js'
 
 const PIN = '4815162342'
 const ORIGEN = 'https://jcaboroca.github.io'
@@ -38,7 +38,7 @@ async function pedir(db, ruta, { metodo = 'GET', pin = PIN, origen = ORIGEN, ip 
     method: metodo, headers: cabeceras, body: cuerpo === undefined ? undefined : JSON.stringify(cuerpo),
   })
   const res = await atender(peticion, {
-    env: entorno(db), fetch: fetch ?? fetchEscenario(crearEscenario(), ahora), ahora,
+    env: entorno(db), fetch: fetch ?? fetchEscenario(crearEscenario(), ahora), ahora, esperar: sinEspera,
   })
   const texto = await res.text()
   return { estado: res.status, cabeceras: res.headers, cuerpo: texto ? JSON.parse(texto) : null }
@@ -50,7 +50,7 @@ async function conDatos() {
   const escenario = crearEscenario()
   await crearSimulacion(db, { capitalInicial: 10_000, version: 'v1', ahora: 0 })
   for (let k = 0; k < 6; k++) {
-    await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(escenario, ahoraDe(k)), ahora: ahoraDe(k) })
+    await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(escenario, ahoraDe(k)), ahora: ahoraDe(k) })
   }
   const t = ahoraDe(5)
   await insertarTitulares(db, [
@@ -194,7 +194,7 @@ describe('GET /api/salud (pública)', () => {
     const db = crearD1()
     assert.deepEqual((await pedir(db, '/api/salud', { pin: null })).cuerpo, { ok: false, ultimaEjecucion: null })
     const ahora = ahoraDe(0)
-    await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(crearEscenario(), ahora), ahora })
+    await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(crearEscenario(), ahora), ahora })
     const r = await pedir(db, '/api/salud', { pin: null, ahora: ahora + HORA })
     assert.equal(r.estado, 200)
     assert.equal(r.cuerpo.ok, true)
@@ -348,7 +348,7 @@ describe('rutas con PIN', () => {
     assert.deepEqual(respuestas.map((r) => r.estado).sort(), [200, 429, 429, 429, 429])
     for (const r of respuestas.filter((x) => x.estado === 429)) assert.equal(r.cuerpo.hasta, ahora + ESPERA_ANALIZAR_MS)
     assert.equal(await db.prepare("SELECT COUNT(*) AS n FROM ejecuciones WHERE tipo = 'manual'").first('n'), 1)
-    assert.equal(fetch.llamadas.filter((l) => l.url.includes('klines')).length, 2 * 4, 'un solo análisis descargó velas')
+    assert.equal(fetch.llamadas.filter((l) => l.url.includes('/market/candles')).length, 2 * 4, 'un solo análisis descargó velas')
   })
 })
 

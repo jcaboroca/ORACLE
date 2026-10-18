@@ -9,7 +9,7 @@ export const CRON_MERCADO = '3 * * * *'
 
 /**
  * @param {string} cron expresión del trigger que ha saltado
- * @param {{ env: any, fetch: typeof fetch, ahora: number }} deps
+ * @param {{ env: any, fetch: typeof fetch, ahora: number, esperar?: (ms: number) => Promise<void> }} deps
  */
 export function programado(cron, deps) {
   if (cron === CRON_NOTICIAS) return ejecutarNoticias(deps)

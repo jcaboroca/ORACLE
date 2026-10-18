@@ -5,7 +5,7 @@
 import { HORA, VENTANA } from '../../core/velas.js'
 import { serie } from '../../test/ayudantes.js'
 import { GEMINI, GROQ } from '../src/fuentes/llm.js'
-import { aFilasBinance, fixtureJson, simularFetch } from './ayudantes.js'
+import { aRespuestaOkx, fixtureJson, simularFetch } from './ayudantes.js'
 
 /** Inicio de la vela 1H que dispara el stop de BTC. Alineado a día y a 4 h. */
 export const CIERRE = Date.UTC(2026, 9, 1)
@@ -43,8 +43,11 @@ export function crearEscenario() {
   return { BTC: btc, ETH: eth }
 }
 
+/** esperar() de los tests: el límite de ritmo de OKX no espera de verdad. */
+export const sinEspera = async () => {}
+
 /**
- * Lo que serviría Binance en `ahora` con `limit`: velas ya empezadas (incluida la que sigue abierta), las `limite` últimas.
+ * Lo que serviría OKX en `ahora` con `limit`: velas ya empezadas (incluida la que sigue abierta), las `limite` últimas.
  * @param {Vela[]} velas
  * @param {number} ahora
  * @param {number} [limite]
@@ -84,31 +87,42 @@ export function entradasEn(escenario, ahora) {
 
 const FNG = fixtureJson('alternative-fng.json')
 
+const BARRAS = /** @type {Record<string, '1h'|'4h'|'1d'>} */ ({ '1H': '1h', '4H': '4h', '1Dutc': '1d' })
+
 /**
- * Binance y alternative.me simulados sobre el escenario en el instante `ahora`. fapi responde 451 (bloqueado),
- * Groq y Gemini 500. Una moneda que no está en el escenario usa las series de BTC.
+ * OKX y alternative.me simulados sobre el escenario en el instante `ahora`. Los derivados de OKX responden
+ * 503 (salvo el funding de `funding`), Groq y Gemini 500. Una moneda que no está en el escenario usa las
+ * series de BTC.
  * @param {ReturnType<typeof crearEscenario>} escenario
  * @param {number} ahora
- * @param {{ caidas?: string[], premium?: Record<string, object>|null }} [op] caidas: pares cuyas velas responden 500
- *   (p. ej. 'SOLUSDT'); premium: respuesta de /fapi/v1/premiumIndex?symbol= por par (el resto de fapi sigue en 451).
+ * @param {{ caidas?: string[], funding?: Record<string, string>|null, limitado?: boolean }} [op]
+ *   caidas: instrumentos cuyas velas responden 500 (p. ej. 'SOL-USDT'); funding: fundingRate por perpetuo
+ *   (p. ej. { 'BTC-USDT-SWAP': '0.0006' }); limitado: todo OKX responde 429 con el código 50011.
  */
-export function fetchEscenario(escenario, ahora, { caidas = [], premium = null } = {}) {
+export function fetchEscenario(escenario, ahora, { caidas = [], funding = null, limitado = false } = {}) {
   return simularFetch((url) => {
-    if (url.startsWith('https://data-api.binance.vision/api/v3/klines')) {
+    if (url.startsWith('https://www.okx.com/') && limitado) {
+      return { estado: 429, cuerpo: { code: '50011', msg: 'Too Many Requests', data: [] } }
+    }
+    if (url.startsWith('https://www.okx.com/api/v5/market/candles?')) {
       const p = new URL(url).searchParams
-      const par = /** @type {string} */ (p.get('symbol'))
-      if (caidas.includes(par)) return { estado: 500, cuerpo: '' }
-      const eur = par.endsWith('EUR')
-      const series = escenario[par.replace(/(USDT|EUR)$/, '')] ?? escenario.BTC
-      const velas = eur ? series.eur : series[/** @type {'1h'|'4h'|'1d'} */ (p.get('interval'))]
-      return { cuerpo: aFilasBinance(servidasEn(velas, ahora, Number(p.get('limit')))) }
+      const instId = /** @type {string} */ (p.get('instId'))
+      if (caidas.includes(instId)) return { estado: 500, cuerpo: '' }
+      const [simbolo, cotizacion] = instId.split('-')
+      const series = escenario[simbolo] ?? escenario.BTC
+      const intervalo = BARRAS[/** @type {string} */ (p.get('bar'))]
+      if (!intervalo) throw new Error(`barra inesperada en el test: ${url}`)
+      const velas = cotizacion === 'EUR' ? series.eur : series[/** @type {'1h'|'4h'|'1d'} */ (intervalo)]
+      return { cuerpo: aRespuestaOkx(servidasEn(velas, ahora, Number(p.get('limit'))), ahora) }
     }
     if (url.startsWith('https://api.alternative.me/fng/')) return { cuerpo: FNG }
-    if (premium && url.startsWith('https://fapi.binance.com/fapi/v1/premiumIndex?symbol=')) {
-      const fila = premium[/** @type {string} */ (new URL(url).searchParams.get('symbol'))]
-      if (fila) return { cuerpo: fila }
+    if (funding && url.startsWith('https://www.okx.com/api/v5/public/funding-rate?')) {
+      const instId = /** @type {string} */ (new URL(url).searchParams.get('instId'))
+      if (funding[instId]) return { cuerpo: { code: '0', msg: '', data: [{ instId, fundingRate: funding[instId] }] } }
     }
-    if (url.startsWith('https://fapi.binance.com/')) return { estado: 451, cuerpo: '' }
+    if (url.startsWith('https://www.okx.com/api/v5/public/') || url.startsWith('https://www.okx.com/api/v5/rubik/')) {
+      return { estado: 503, cuerpo: '' }
+    }
     if (url === GROQ || url.startsWith(GEMINI)) return { estado: 500, cuerpo: '' }
     throw new Error(`URL inesperada en el test: ${url}`)
   })

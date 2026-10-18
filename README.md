@@ -56,13 +56,15 @@ titulares ni de derivados, así que esos componentes no participan (sus pesos se
 base de datos y una API JSON protegida por PIN para la PWA. Usa exactamente el mismo
 `core/hora.js` que el backtest, con la estrategia guardada en cada simulación.
 
-- Fuentes: velas de `data-api.binance.vision` (USDT para indicadores, EUR para el bot), derivados
-  de Binance Futures (opcionales), Fear & Greed de alternative.me, 14 RSS y Reddit (best-effort).
+- Fuentes: velas y derivados (opcionales) de OKX (USDT para indicadores, EUR para el bot; desde
+  Cloudflare Binance responde 403), Fear & Greed de alternative.me, 14 RSS y Reddit (best-effort).
+  El backtest usa histórico de Binance: misma lógica y misma ventana de 299 velas, distinta fuente
+  (spec §4 y §8).
 - Titulares puntuados por un LLM en cascada: Workers AI → Groq → Gemini → léxico local
   (`core/lexico.js`). Se guarda qué motor puntuó cada titular.
 - Cada moneda se guarda en un único lote atómico de D1: repetir una hora no duplica nada.
 - Los tests del Worker corren con `npm test`, sin red: D1 se simula con `node:sqlite`
-  (Node ≥ 22.13) y las fuentes con respuestas reales grabadas en `test/fixtures/`.
+  (Node ≥ 22.13) y las fuentes con respuestas reales grabadas en `worker/test/fixtures/`.
 - Despliegue con `npx wrangler@4` desde `worker/`: pasos en la «Checklist de despliegue» de
   [docs/superpowers/plans/2026-10-18-oracle-plan-2-worker.md](docs/superpowers/plans/2026-10-18-oracle-plan-2-worker.md).
   Secrets: `ORACLE_PIN` y, opcionales, `GROQ_API_KEY` y `GEMINI_API_KEY`.

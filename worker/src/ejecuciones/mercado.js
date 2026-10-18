@@ -1,17 +1,18 @@
 // @ts-check
 // Cron `3 * * * *` (mercado y bot) y POST /api/analizar (solo señales; nunca opera). Spec §5 y §7.
-// Subpeticiones externas con 5 monedas: 20 velas (15 USDT de 501 + 5 EUR de 48) + 15 derivados (3 por moneda)
-// + 1 Fear & Greed + hasta 2 LLM (Groq y Gemini; Workers AI va por binding) = 38 de 50.
+// Datos de mercado de OKX (desde Cloudflare Binance responde 403). Subpeticiones externas con 5 monedas:
+// 20 velas (15 USDT de 300 + 5 EUR de 48) + 15 derivados (3 por moneda) + hasta 6 reintentos por límite de
+// ritmo + 1 Fear & Greed + hasta 2 LLM (Groq y Gemini; Workers AI va por binding) = 38-44 de 50.
 // Llamadas a D1: como mucho 17 (5 de ellas, un lote atómico por moneda).
 import { valorCartera, valorHodl, velaDeDecision } from '../../../core/bot.js'
 import { ESTRATEGIA_ACTIVA, estrategia as obtenerEstrategia } from '../../../core/estrategias.js'
 import { ejecutarHora } from '../../../core/hora.js'
 import { HORA } from '../../../core/velas.js'
 import { CAPITAL_POR_DEFECTO, leerMonedas } from '../config.js'
-import { cambio24h, descargarMoneda, ultimoCierre } from '../fuentes/binance.js'
 import { completarDerivados, descargarDerivados } from '../fuentes/derivados.js'
 import { descargarFng } from '../fuentes/fng.js'
 import { explicarSenales } from '../fuentes/llm.js'
+import { cambio24h, crearCliente, descargarMoneda, ultimoCierre } from '../fuentes/okx.js'
 import * as repo from '../repositorio.js'
 
 /** @typedef {import('../../../core/hora.js').EntradaMoneda} EntradaMoneda */
@@ -23,16 +24,19 @@ import * as repo from '../repositorio.js'
 const mensaje = (e) => (e instanceof Error ? e.message : String(e))
 
 /**
- * Velas, derivados y Fear & Greed en paralelo. Nada de esto lanza: lo que falla se anota.
+ * Velas y derivados (OKX, con un solo cliente que limita el ritmo) y Fear & Greed en paralelo.
+ * Nada de esto lanza: lo que falla se anota.
  * @param {typeof fetch} fetch
  * @param {string[]} monedas
  * @param {number} ahora
- * @returns {Promise<{ entradas: EntradaMoneda[], fng: Fng|null, fallos: string[] }>}
+ * @param {(ms: number) => Promise<void>} [esperar] pausas del límite de ritmo (inyectable en los tests)
+ * @returns {Promise<{ entradas: EntradaMoneda[], fng: Fng|null, fallos: string[], reintentosOkx: number }>}
  */
-export async function recogerDatos(fetch, monedas, ahora) {
+export async function recogerDatos(fetch, monedas, ahora, esperar) {
+  const okx = crearCliente(fetch, esperar ? { esperar } : {})
   const [porMoneda, derivados, fng] = await Promise.all([
-    Promise.all(monedas.map((m) => descargarMoneda(fetch, m))),
-    descargarDerivados(fetch, monedas),
+    Promise.all(monedas.map((m) => descargarMoneda(okx, m))),
+    descargarDerivados(okx, monedas),
     descargarFng(fetch).then((valor) => ({ valor, fallo: null }), (e) => ({ valor: null, fallo: `fng: ${mensaje(e)}` })),
   ])
   const fallos = [...porMoneda.flatMap((m) => m.fallos), ...derivados.fallos, ...(fng.fallo ? [fng.fallo] : [])]
@@ -42,7 +46,7 @@ export async function recogerDatos(fetch, monedas, ahora) {
     velasEur: m.velasEur,
     derivados: completarDerivados(derivados.base[m.simbolo], cambio24h(m.velas['1h'], ahora)),
   }))
-  return { entradas, fng: fng.valor, fallos }
+  return { entradas, fng: fng.valor, fallos, reintentosOkx: okx.reintentos }
 }
 
 /**
@@ -126,11 +130,12 @@ export async function operar(db, { sim, est, entradas, titulares, fng, ahora }) 
 
 /**
  * @param {{ env: { DB: import('../repositorio.js').D1, MONEDAS?: string } & import('../fuentes/llm.js').EntornoLlm,
- *   fetch: typeof fetch, ahora: number, manual?: boolean, idEjecucion?: number }} deps
+ *   fetch: typeof fetch, ahora: number, manual?: boolean, idEjecucion?: number, esperar?: (ms: number) => Promise<void> }} deps
  *   manual: true para POST /api/analizar (refresca señales; nunca crea simulaciones ni opera).
  *   idEjecucion: fila de ejecuciones ya reservada (repo.reservarManual); si no viene, se crea.
+ *   esperar: pausas del límite de ritmo de OKX (por defecto, setTimeout).
  */
-export async function ejecutarMercado({ env, fetch, ahora, manual = false, idEjecucion }) {
+export async function ejecutarMercado({ env, fetch, ahora, manual = false, idEjecucion, esperar }) {
   const db = env.DB
   const tipo = manual ? 'manual' : 'mercado'
   const id = idEjecucion ?? await repo.iniciarEjecucion(db, tipo, ahora)
@@ -143,7 +148,7 @@ export async function ejecutarMercado({ env, fetch, ahora, manual = false, idEje
     let sim = await repo.simulacionActiva(db)
     if (!sim && !manual) sim = await repo.crearSimulacion(db, { capitalInicial: CAPITAL_POR_DEFECTO, version: ESTRATEGIA_ACTIVA, ahora })
     const est = obtenerEstrategia(sim?.estrategia_version ?? ESTRATEGIA_ACTIVA)
-    const datos = await recogerDatos(fetch, monedas, ahora)
+    const datos = await recogerDatos(fetch, monedas, ahora, esperar)
     fallos.push(...datos.fallos)
     const titulares = await repo.titularesParaEstrategia(db, ahora - 24 * HORA, ahora)
     const fngValor = datos.fng?.valor ?? null
@@ -170,7 +175,7 @@ export async function ejecutarMercado({ env, fetch, ahora, manual = false, idEje
     })))
     const fin = Date.now()
     await repo.finalizarEjecucion(db, id, {
-      fin, ok: true, detalle: { fallos, repetidas, operaciones, simulacionId: sim?.id ?? null, fng: datos.fng },
+      fin, ok: true, detalle: { fallos, repetidas, operaciones, simulacionId: sim?.id ?? null, fng: datos.fng, reintentosOkx: datos.reintentosOkx },
     })
     return { ejecucion: { id, tipo, inicio: ahora, fin, ok: true, fallos }, senales: enriquecidas, repetidas, operaciones }
   } catch (e) {
