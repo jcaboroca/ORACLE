@@ -4,12 +4,13 @@ import { describe, test } from 'node:test'
 import { estadoInicial, velaDeDecision } from '../../core/bot.js'
 import * as v1 from '../../core/estrategia-v1.js'
 import * as v2 from '../../core/estrategia-v2.js'
+import { ejecutarBacktest } from '../../core/backtest.js'
 import { ESTRATEGIA_ACTIVA } from '../../core/estrategias.js'
 import { ejecutarHora } from '../../core/hora.js'
 import { ejecutarMercado } from '../src/ejecuciones/mercado.js'
 import { cargarEstado, crearSimulacion, obtenerSimulacion, senalesActuales } from '../src/repositorio.js'
 import { crearD1 } from './d1.js'
-import { ahoraDe, crearEscenario, entradasEn, fetchEscenario, servidasEn } from './escenario.js'
+import { CIERRE, ahoraDe, crearEscenario, entradasBacktest, fetchEscenario, servidasEn } from './escenario.js'
 
 /** @param {ReturnType<typeof crearD1>|any} db @param {string} [monedas] */
 const entorno = (db, monedas = 'BTC,ETH') => ({ DB: db, MONEDAS: monedas })
@@ -58,7 +59,7 @@ describe('ejecutarMercado (cron)', () => {
     await comprobarLibro(db)
   })
 
-  test('hora a hora da exactamente lo mismo que core/hora.js en memoria (paridad con el backtest)', async () => {
+  test('hora a hora da exactamente lo mismo que core/hora.js con las ventanas del backtest (500 velas cerradas)', async () => {
     const db = crearD1()
     const escenario = crearEscenario()
     await crearSimulacion(db, { capitalInicial: 10_000, version: 'v1', ahora: 0 })
@@ -70,7 +71,7 @@ describe('ejecutarMercado (cron)', () => {
       const r = await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(escenario, ahora), ahora })
       assert.deepEqual(r.repetidas, [])
       const memoria = ejecutarHora({
-        estado, hodl, capitalInicial: 10_000, ahora, monedas: entradasEn(escenario, ahora), titulares: [], fng: 53, estrategia: v1,
+        estado, hodl, capitalInicial: 10_000, ahora, monedas: entradasBacktest(escenario, ahora), titulares: [], fng: 53, estrategia: v1,
       })
       estado = memoria.estado
       hodl = memoria.hodl
@@ -81,14 +82,27 @@ describe('ejecutarMercado (cron)', () => {
       const capital = await db.prepare('SELECT * FROM capital WHERE vela_1h = ?').bind(velaDeDecision(ahora)).first()
       assert.equal(capital.valor_cartera, memoria.punto.valor, `capital en la hora ${k}`)
       assert.equal(capital.valor_hodl, memoria.punto.hodl)
-      const decisiones = await filas(db, 'SELECT simbolo, motivo FROM decisiones WHERE vela_1h = ? ORDER BY id', velaDeDecision(ahora))
-      assert.deepEqual(decisiones, memoria.decisiones.map((d) => ({ simbolo: d.simbolo, motivo: d.motivo })))
+      const decisiones = await filas(db, 'SELECT simbolo, motivo, desglose_json FROM decisiones WHERE vela_1h = ? ORDER BY id', velaDeDecision(ahora))
+      assert.deepEqual(decisiones.map((d) => ({ simbolo: d.simbolo, motivo: d.motivo })), memoria.decisiones.map((d) => ({ simbolo: d.simbolo, motivo: d.motivo })))
+      // La señal completa (indicadores incluidos) coincide bit a bit: misma ventana de velas que el backtest.
+      assert.deepEqual(decisiones.map((d) => JSON.parse(d.desglose_json)), JSON.parse(JSON.stringify(memoria.senales)), `señales en la hora ${k}`)
     }
     const motivos = await filas(db, 'SELECT simbolo, lado, motivo FROM operaciones ORDER BY id')
     assert.deepEqual(motivos.map((o) => `${o.simbolo}:${o.lado}:${o.motivo}`), [
       'BTC:compra:senal', 'ETH:compra:senal', 'BTC:venta:stop_loss', 'ETH:venta:take_profit', 'ETH:compra:senal', 'BTC:compra:senal',
     ])
     await comprobarLibro(db)
+    // El backtest real sobre las mismas series da las mismas operaciones y el mismo saldo, bit a bit.
+    const bt = ejecutarBacktest({ series: escenario, fng: [{ t: 0, valor: 53 }], desde: CIERRE, hasta: ahoraDe(7), estrategia: v1 })
+    const ops = await filas(db, 'SELECT * FROM operaciones ORDER BY id')
+    assert.deepEqual(ops.map((o) => ({
+      tipo: o.lado, simbolo: o.simbolo, vela: o.vela_1h, precio: o.precio, unidades: o.unidades, importe: o.importe,
+      comision: o.comision, deslizamiento: o.deslizamiento, motivo: o.motivo, pnlNeto: o.pnl_neto ?? undefined,
+    })), bt.operaciones.map((o) => ({
+      tipo: o.tipo, simbolo: o.simbolo, vela: o.vela, precio: o.precio, unidades: o.unidades, importe: o.importe,
+      comision: o.comision, deslizamiento: o.deslizamiento, motivo: o.motivo, pnlNeto: o.pnlNeto,
+    })))
+    assert.equal(await db.prepare('SELECT saldo FROM simulaciones').first('saldo'), bt.metricas.saldo)
   })
 
   test('cada simulación usa su propia estrategia: una v2 decide solo al cierre diario y revisa stops cada hora', async () => {
@@ -102,7 +116,7 @@ describe('ejecutarMercado (cron)', () => {
       const ahora = ahoraDe(k)
       await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(escenario, ahora), ahora })
       const memoria = ejecutarHora({
-        estado, hodl, capitalInicial: 10_000, ahora, monedas: entradasEn(escenario, ahora), titulares: [], fng: 53, estrategia: v2,
+        estado, hodl, capitalInicial: 10_000, ahora, monedas: entradasBacktest(escenario, ahora), titulares: [], fng: 53, estrategia: v2,
       })
       estado = memoria.estado
       hodl = memoria.hodl

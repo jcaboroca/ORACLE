@@ -16,7 +16,7 @@ describe('binance', () => {
   test('valida y convierte el fixture real de klines', async () => {
     const fetch = simularFetch(() => ({ cuerpo: KLINES }))
     const velas = await descargarVelas(fetch, 'BTCEUR', '1h')
-    assert.equal(fetch.llamadas[0].url, `${BINANCE}?symbol=BTCEUR&interval=1h&limit=500`)
+    assert.equal(fetch.llamadas[0].url, `${BINANCE}?symbol=BTCEUR&interval=1h&limit=501`)
     assert.equal(velas.length, 3)
     assert.deepEqual(velas[0], {
       inicio: 1792350000000, fin: 1792353600000, apertura: 72227.92, maximo: 72256.2, minimo: 71897.67,
@@ -46,10 +46,10 @@ describe('binance', () => {
     const fetch = simularFetch((url) => (url.includes('interval=4h') ? { estado: 500, cuerpo: '' } : { cuerpo: KLINES }))
     const m = await descargarMoneda(fetch, 'BTC')
     assert.deepEqual(fetch.llamadas.map((l) => l.url), [
-      `${BINANCE}?symbol=BTCUSDT&interval=1h&limit=500`,
-      `${BINANCE}?symbol=BTCUSDT&interval=4h&limit=500`,
-      `${BINANCE}?symbol=BTCUSDT&interval=1d&limit=500`,
-      `${BINANCE}?symbol=BTCEUR&interval=1h&limit=500`,
+      `${BINANCE}?symbol=BTCUSDT&interval=1h&limit=501`,
+      `${BINANCE}?symbol=BTCUSDT&interval=4h&limit=501`,
+      `${BINANCE}?symbol=BTCUSDT&interval=1d&limit=501`,
+      `${BINANCE}?symbol=BTCEUR&interval=1h&limit=501`,
     ])
     assert.equal(m.velas['1h'].length, 3)
     assert.deepEqual(m.velas['4h'], [])

@@ -85,7 +85,7 @@ mismo código se ejecuta en el Worker, en el backtest y en los tests.
 
 | Fuente | Endpoint | Clave | Uso |
 |---|---|---|---|
-| Velas USDT (indicadores) | `data-api.binance.vision/api/v3/klines` `{SYM}USDT` 1h/4h/1d, 500 velas | No | Señal |
+| Velas USDT (indicadores) | `data-api.binance.vision/api/v3/klines` `{SYM}USDT` 1h/4h/1d, `limit=501` (500 cerradas + la vela en curso, como la ventana del backtest) | No | Señal |
 | Velas EUR (ejecución) | ídem `{SYM}EUR` 1h | No | Precios del bot, stops, valoración |
 | Funding | `fapi.binance.com/fapi/v1/premiumIndex` (todas en 1 llamada) | No | Derivados |
 | Long/short | `fapi.binance.com/futures/data/globalLongShortAccountRatio` 1h | No | Derivados |

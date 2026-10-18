@@ -5,7 +5,10 @@ import { cerradasHasta, desdeBinance } from '../../../core/velas.js'
 /** @typedef {import('../../../core/velas.js').Vela} Vela */
 
 export const BINANCE = 'https://data-api.binance.vision/api/v3/klines'
-export const LIMITE_VELAS = 500
+/** Velas cerradas que ve la estrategia, igual que la ventana del backtest (core/backtest.js). */
+export const VENTANA = 500
+/** Binance incluye la vela en curso: se piden VENTANA + 1 para que queden VENTANA cerradas. */
+export const LIMITE_VELAS = VENTANA + 1
 
 /**
  * Comprueba que la respuesta de /klines es una lista de filas coherentes y ordenadas.

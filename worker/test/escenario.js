@@ -23,9 +23,10 @@ function seriesDe(base) {
     duracion, inicio: CIERRE - previas * duracion,
   })
   return {
-    '1h': subida(HORA, 300),
-    '4h': subida(4 * HORA, 300),
-    '1d': subida(24 * HORA, 300),
+    // Más de 501 velas por serie: así la ventana de 500 velas cerradas del backtest recorta de verdad.
+    '1h': subida(HORA, 600),
+    '4h': subida(4 * HORA, 600),
+    '1d': subida(24 * HORA, 600),
     eur: serie(48 + HORAS_EXTRA + 1, (i) => base * 0.9 * 1.002 ** i, { inicio: CIERRE - 48 * HORA }),
   }
 }
@@ -43,11 +44,29 @@ export function crearEscenario() {
 }
 
 /**
- * Lo que serviría Binance en `ahora`: velas ya empezadas (incluida la que sigue abierta), las 500 últimas.
+ * Lo que serviría Binance en `ahora` con `limit`: velas ya empezadas (incluida la que sigue abierta), las `limite` últimas.
  * @param {Vela[]} velas
  * @param {number} ahora
+ * @param {number} [limite]
  */
-export const servidasEn = (velas, ahora) => velas.filter((v) => v.inicio < ahora).slice(-500)
+export const servidasEn = (velas, ahora, limite = 500) => velas.filter((v) => v.inicio < ahora).slice(-limite)
+
+/**
+ * Entradas de core/hora.js para `ahora` con las ventanas de core/backtest.js: las 500 últimas velas USDT
+ * cerradas y las 24 últimas EUR cerradas, sin derivados.
+ * @param {Record<string, Series>} escenario
+ * @param {number} ahora
+ */
+export function entradasBacktest(escenario, ahora) {
+  /** @param {Vela[]} velas @param {number} n */
+  const ultimas = (velas, n) => velas.filter((v) => v.fin <= ahora).slice(-n)
+  return Object.entries(escenario).map(([simbolo, s]) => ({
+    simbolo,
+    velas: { '1h': ultimas(s['1h'], 500), '4h': ultimas(s['4h'], 500), '1d': ultimas(s['1d'], 500) },
+    velasEur: ultimas(s.eur, 24),
+    derivados: null,
+  }))
+}
 
 /**
  * Entradas de core/hora.js para `ahora`, sin derivados.
@@ -82,7 +101,7 @@ export function fetchEscenario(escenario, ahora, { caidas = [], premium = null }
       const eur = par.endsWith('EUR')
       const series = escenario[par.replace(/(USDT|EUR)$/, '')] ?? escenario.BTC
       const velas = eur ? series.eur : series[/** @type {'1h'|'4h'|'1d'} */ (p.get('interval'))]
-      return { cuerpo: aFilasBinance(servidasEn(velas, ahora)) }
+      return { cuerpo: aFilasBinance(servidasEn(velas, ahora, Number(p.get('limit')))) }
     }
     if (url.startsWith('https://api.alternative.me/fng/')) return { cuerpo: FNG }
     if (premium && url === 'https://fapi.binance.com/fapi/v1/premiumIndex') return { cuerpo: premium }
