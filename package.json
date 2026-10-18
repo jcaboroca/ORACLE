@@ -5,10 +5,10 @@
   "type": "module",
   "description": "Asistente de trading crypto con bot de paper trading. Simulación: no es asesoramiento financiero.",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "scripts": {
-    "test": "node --test \"test/*.test.js\"",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.js\" \"worker/test/*.test.js\"",
     "backtest": "node scripts/backtest.mjs"
   }
 }
