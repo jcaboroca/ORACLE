@@ -292,3 +292,25 @@ export async function purgar(db, ahora) {
     db.prepare('DELETE FROM intentos_pin WHERE bloqueado_hasta IS NOT NULL AND bloqueado_hasta < ?').bind(ahora),
   ])
 }
+
+// ── Señales actuales ─────────────────────────────────────────────────────────
+
+/**
+ * Sustituye la señal vigente de cada moneda (1 llamada).
+ * @param {D1} db
+ * @param {{ simbolo: string, calculadaEn: number, vela1h: number, senal: object }[]} senales
+ */
+export async function guardarSenales(db, senales) {
+  if (senales.length === 0) return
+  await db.batch(senales.map((s) => db.prepare(
+    `INSERT INTO senales_actuales (simbolo, calculada_en, vela_1h, senal_json) VALUES (?, ?, ?, ?)
+     ON CONFLICT (simbolo) DO UPDATE SET calculada_en = excluded.calculada_en, vela_1h = excluded.vela_1h,
+       senal_json = excluded.senal_json`,
+  ).bind(s.simbolo, s.calculadaEn, s.vela1h, JSON.stringify(s.senal))))
+}
+
+/** @param {D1} db @returns {Promise<Record<string, any>>} señal guardada por símbolo */
+export async function senalesActuales(db) {
+  const { results } = await db.prepare('SELECT simbolo, senal_json FROM senales_actuales').all()
+  return Object.fromEntries(results.map((f) => [f.simbolo, JSON.parse(f.senal_json)]))
+}
