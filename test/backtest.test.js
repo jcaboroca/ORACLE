@@ -28,7 +28,7 @@ function moneda(base) {
 }
 
 const series = { BTC: moneda(100), ETH: moneda(10) }
-const fng = Array.from({ length: 400 }, (_, i) => ({ t: INICIO - 300 * DIA + i * DIA, valor: 50 }))
+const fng = Array.from({ length: 400 }, (_, i) => ({ t: INICIO - 300 * DIA + i * DIA, valor: i % 2 === 0 ? 10 : 90 }))
 
 describe('ejecutarBacktest', () => {
   const desde = INICIO
@@ -50,14 +50,18 @@ describe('ejecutarBacktest', () => {
     const ultima = r.curvaDiaria[r.curvaDiaria.length - 1]
     assert.ok(Math.abs(ultima.valor - r.metricas.valorCartera) < 1e-6)
   })
-  test('sin información futura: los datos posteriores a "hasta" no cambian nada', () => {
-    const corte = hasta
+  test('sin información futura: alterar lo que aún no había cerrado en la última evaluación no cambia nada', () => {
+    const corte = r.curvaDiaria[r.curvaDiaria.length - 1].t
+    assert.equal(corte, hasta - HORA + 3 * 60_000)
     /** @param {import('../core/velas.js').Vela[]} v */
-    const truncar = (v) => v.filter((x) => x.fin <= corte)
-    const truncadas = Object.fromEntries(Object.entries(series).map(([m, s]) => [m, {
-      '1h': truncar(s['1h']), '4h': truncar(s['4h']), '1d': truncar(s['1d']), eur: truncar(s.eur),
+    const alterar = (v) => v.map((x) => (x.fin > corte
+      ? { ...x, apertura: x.apertura * 3, maximo: x.maximo * 3, minimo: x.minimo * 3, cierre: x.cierre * 3 }
+      : x))
+    const alteradas = Object.fromEntries(Object.entries(series).map(([m, s]) => [m, {
+      '1h': alterar(s['1h']), '4h': alterar(s['4h']), '1d': alterar(s['1d']), eur: alterar(s.eur),
     }]))
-    const r2 = ejecutarBacktest({ series: truncadas, fng: fng.filter((f) => f.t <= corte), desde, hasta })
+    const fngAlterado = fng.map((f) => (f.t > corte ? { ...f, valor: 100 - f.valor } : f))
+    const r2 = ejecutarBacktest({ series: alteradas, fng: fngAlterado, desde, hasta })
     assert.deepEqual(r2, r)
   })
 })
