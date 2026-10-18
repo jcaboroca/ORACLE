@@ -66,5 +66,7 @@ base de datos y una API JSON protegida por PIN para la PWA. Usa exactamente el m
 - Despliegue con `npx wrangler@4` desde `worker/`: pasos en la «Checklist de despliegue» de
   [docs/superpowers/plans/2026-10-18-oracle-plan-2-worker.md](docs/superpowers/plans/2026-10-18-oracle-plan-2-worker.md).
   Secrets: `ORACLE_PIN` y, opcionales, `GROQ_API_KEY` y `GEMINI_API_KEY`.
+  La base D1 `oracle` (WEUR) ya existe y su id está en `worker/wrangler.toml`; antes del primer
+  despliegue se aplican las migraciones `0001`-`0003` con `npx wrangler@4 d1 migrations apply oracle --remote`.
 
 No existe ninguna ruta que envíe órdenes a un exchange: es una simulación.
