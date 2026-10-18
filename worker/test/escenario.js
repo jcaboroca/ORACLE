@@ -89,8 +89,8 @@ const FNG = fixtureJson('alternative-fng.json')
  * Groq y Gemini 500. Una moneda que no está en el escenario usa las series de BTC.
  * @param {ReturnType<typeof crearEscenario>} escenario
  * @param {number} ahora
- * @param {{ caidas?: string[], premium?: object[]|null }} [op] caidas: pares cuyas velas responden 500
- *   (p. ej. 'SOLUSDT'); premium: respuesta de /fapi/v1/premiumIndex (el resto de fapi sigue en 451).
+ * @param {{ caidas?: string[], premium?: Record<string, object>|null }} [op] caidas: pares cuyas velas responden 500
+ *   (p. ej. 'SOLUSDT'); premium: respuesta de /fapi/v1/premiumIndex?symbol= por par (el resto de fapi sigue en 451).
  */
 export function fetchEscenario(escenario, ahora, { caidas = [], premium = null } = {}) {
   return simularFetch((url) => {
@@ -104,7 +104,10 @@ export function fetchEscenario(escenario, ahora, { caidas = [], premium = null }
       return { cuerpo: aFilasBinance(servidasEn(velas, ahora, Number(p.get('limit')))) }
     }
     if (url.startsWith('https://api.alternative.me/fng/')) return { cuerpo: FNG }
-    if (premium && url === 'https://fapi.binance.com/fapi/v1/premiumIndex') return { cuerpo: premium }
+    if (premium && url.startsWith('https://fapi.binance.com/fapi/v1/premiumIndex?symbol=')) {
+      const fila = premium[/** @type {string} */ (new URL(url).searchParams.get('symbol'))]
+      if (fila) return { cuerpo: fila }
+    }
     if (url.startsWith('https://fapi.binance.com/')) return { estado: 451, cuerpo: '' }
     if (url === GROQ || url.startsWith(GEMINI)) return { estado: 500, cuerpo: '' }
     throw new Error(`URL inesperada en el test: ${url}`)

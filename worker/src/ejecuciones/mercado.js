@@ -1,6 +1,7 @@
 // @ts-check
 // Cron `3 * * * *` (mercado y bot) y POST /api/analizar (solo señales; nunca opera). Spec §5 y §7.
-// Subpeticiones externas con 5 monedas: 20 velas + 11 derivados + 1 Fear & Greed + hasta 2 LLM = 34.
+// Subpeticiones externas con 5 monedas: 20 velas (15 USDT de 501 + 5 EUR de 48) + 15 derivados (3 por moneda)
+// + 1 Fear & Greed + hasta 2 LLM (Groq y Gemini; Workers AI va por binding) = 38 de 50.
 // Llamadas a D1: como mucho 17 (5 de ellas, un lote atómico por moneda).
 import { valorCartera, valorHodl, velaDeDecision } from '../../../core/bot.js'
 import { ESTRATEGIA_ACTIVA, estrategia as obtenerEstrategia } from '../../../core/estrategias.js'

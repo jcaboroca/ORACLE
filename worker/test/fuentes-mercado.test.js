@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { HORA, desdeBinance } from '../../core/velas.js'
 import { serie } from '../../test/ayudantes.js'
-import { BINANCE, cambio24h, descargarMoneda, descargarVelas, ultimoCierre, validarKlines } from '../src/fuentes/binance.js'
+import { BINANCE, LIMITE_EUR, cambio24h, descargarMoneda, descargarVelas, leerKlines, ultimoCierre } from '../src/fuentes/binance.js'
 import {
   FAPI, completarDerivados, descargarDerivados, leerFunding, leerLongShort, leerOpenInterest,
 } from '../src/fuentes/derivados.js'
@@ -24,17 +24,19 @@ describe('binance', () => {
     })
   })
 
-  test('rechaza respuestas mal formadas antes de convertirlas', () => {
+  test('rechaza respuestas mal formadas mientras las convierte (una sola pasada)', () => {
     const buena = KLINES[0]
-    assert.throws(() => validarKlines({ code: -1121 }), /no es una lista/)
-    assert.throws(() => validarKlines([buena.slice(0, 6)]), /mal formada/)
-    assert.throws(() => validarKlines([[buena[0], 'NaN', ...buena.slice(2)]]), /precio no válido/)
-    assert.throws(() => validarKlines([[buena[0], '0', ...buena.slice(2)]]), /precio no válido/)
-    assert.throws(() => validarKlines([[buena[0], buena[1], '1', ...buena.slice(3)]]), /OHLC incoherente/)
-    assert.throws(() => validarKlines([[buena[0], ...buena.slice(1, 6), buena[0] - 1, ...buena.slice(7)]]), /tiempos/)
-    assert.throws(() => validarKlines([KLINES[1], KLINES[0]]), /desordenadas/)
-    assert.throws(() => validarKlines([KLINES[0], KLINES[0]]), /desordenadas/)
-    assert.deepEqual(validarKlines([]), [])
+    assert.throws(() => leerKlines({ code: -1121 }), /no es una lista/)
+    assert.throws(() => leerKlines([buena.slice(0, 6)]), /mal formada/)
+    assert.throws(() => leerKlines([[buena[0], 'NaN', ...buena.slice(2)]]), /precio no válido/)
+    assert.throws(() => leerKlines([[buena[0], '0', ...buena.slice(2)]]), /precio no válido/)
+    assert.throws(() => leerKlines([[buena[0], buena[1], '1', ...buena.slice(3)]]), /OHLC incoherente/)
+    assert.throws(() => leerKlines([[buena[0], ...buena.slice(1, 5), '-1', ...buena.slice(6)]]), /volumen/)
+    assert.throws(() => leerKlines([[buena[0], ...buena.slice(1, 6), buena[0] - 1, ...buena.slice(7)]]), /tiempos/)
+    assert.throws(() => leerKlines([KLINES[1], KLINES[0]]), /desordenadas/)
+    assert.throws(() => leerKlines([KLINES[0], KLINES[0]]), /desordenadas/)
+    assert.deepEqual(leerKlines([]), [])
+    assert.deepEqual(leerKlines(KLINES), desdeBinance(KLINES), 'mismas velas que la conversión de core/velas.js')
   })
 
   test('HTTP de error → excepción con el código', async () => {
@@ -49,8 +51,9 @@ describe('binance', () => {
       `${BINANCE}?symbol=BTCUSDT&interval=1h&limit=501`,
       `${BINANCE}?symbol=BTCUSDT&interval=4h&limit=501`,
       `${BINANCE}?symbol=BTCUSDT&interval=1d&limit=501`,
-      `${BINANCE}?symbol=BTCEUR&interval=1h&limit=501`,
+      `${BINANCE}?symbol=BTCEUR&interval=1h&limit=48`,
     ])
+    assert.equal(LIMITE_EUR, 48)
     assert.equal(m.velas['1h'].length, 3)
     assert.deepEqual(m.velas['4h'], [])
     assert.equal(m.velasEur.length, 3)
@@ -58,7 +61,7 @@ describe('binance', () => {
   })
 
   test('ultimoCierre ignora la vela en curso del fixture', () => {
-    const velas = desdeBinance(validarKlines(KLINES))
+    const velas = leerKlines(KLINES)
     const ahora = 1792357200000 + 3 * 60_000 // la 3.ª vela del fixture sigue abierta
     assert.equal(ultimoCierre(velas, ahora), 72096.96)
     assert.equal(ultimoCierre([], ahora), null)
@@ -75,10 +78,12 @@ describe('binance', () => {
 })
 
 describe('derivados', () => {
-  test('funding de las monedas pedidas desde el fixture real de premiumIndex', () => {
-    const f = leerFunding(fixtureJson('binance-premiumIndex.json'), ['BTC', 'XRP', 'DOGE'])
-    assert.deepEqual(f, { BTC: 0.00000685, XRP: -0.00011915, DOGE: null })
-    assert.throws(() => leerFunding({}, ['BTC']), /no es una lista/)
+  test('funding de una moneda desde el fixture real de premiumIndex?symbol=', () => {
+    const fila = fixtureJson('binance-premiumIndex-BTCUSDT.json')
+    assert.equal(leerFunding(fila, 'BTC'), 0.00003034)
+    assert.throws(() => leerFunding(fila, 'ETH'), /otra moneda/)
+    assert.throws(() => leerFunding([fila], 'BTC'), /no es un objeto/)
+    assert.throws(() => leerFunding({ ...fila, lastFundingRate: 'x' }, 'BTC'), /funding no válido/)
   })
 
   test('long/short del fixture real', () => {
@@ -95,18 +100,24 @@ describe('derivados', () => {
     assert.throws(() => leerOpenInterest([...puntos.slice(0, 24), { ...puntos[24], timestamp: 0 }]), /24 h/)
   })
 
-  test('descargarDerivados: 1 + 2·n peticiones y cada dato por su lado', async () => {
+  test('descargarDerivados: 3·n peticiones pequeñas (premiumIndex por moneda) y cada dato por su lado', async () => {
     const fetch = simularFetch((url) => {
-      if (url.endsWith('/fapi/v1/premiumIndex')) return { cuerpo: fixtureJson('binance-premiumIndex.json') }
+      if (url.includes('/fapi/v1/premiumIndex?symbol=')) {
+        const simbolo = new URL(url).searchParams.get('symbol')
+        return { cuerpo: { ...fixtureJson('binance-premiumIndex-BTCUSDT.json'), symbol: simbolo, lastFundingRate: simbolo === 'ETHUSDT' ? '0.0000112' : '0.00003034' } }
+      }
       if (url.includes('globalLongShortAccountRatio')) return { cuerpo: fixtureJson('binance-globalLongShortAccountRatio-BTCUSDT.json') }
       if (url.includes('symbol=ETHUSDT')) return { estado: 451, cuerpo: '' }
       return { cuerpo: fixtureJson('binance-openInterestHist-BTCUSDT.json') }
     })
     const { base, fallos } = await descargarDerivados(fetch, ['BTC', 'ETH'])
-    assert.equal(fetch.llamadas.length, 5)
-    assert.equal(fetch.llamadas[1].url, `${FAPI}/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=1h&limit=1`)
-    assert.equal(fetch.llamadas[2].url, `${FAPI}/futures/data/openInterestHist?symbol=BTCUSDT&period=1h&limit=25`)
-    assert.equal(base.BTC.funding, 0.00000685)
+    assert.equal(fetch.llamadas.length, 6)
+    assert.deepEqual(fetch.llamadas.slice(0, 3).map((l) => l.url), [
+      `${FAPI}/fapi/v1/premiumIndex?symbol=BTCUSDT`,
+      `${FAPI}/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=1h&limit=1`,
+      `${FAPI}/futures/data/openInterestHist?symbol=BTCUSDT&period=1h&limit=25`,
+    ])
+    assert.equal(base.BTC.funding, 0.00003034)
     assert.equal(base.BTC.ratioLongShort, 1.8281)
     assert.ok(base.BTC.oiCambio24h !== null)
     assert.equal(base.ETH.funding, 0.0000112)

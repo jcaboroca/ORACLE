@@ -55,7 +55,7 @@ describe('ejecutarMercado (cron)', () => {
     assert.equal(ejecucion.tipo, 'mercado')
     const detalle = JSON.parse(ejecucion.detalle_json)
     assert.deepEqual(detalle.fng, { valor: 53, clasificacion: 'Neutral', t: 1792281600000 })
-    assert.equal(detalle.fallos.filter((/** @type {string} */ f) => f.startsWith('derivados')).length, 5)
+    assert.equal(detalle.fallos.filter((/** @type {string} */ f) => f.startsWith('derivados')).length, 6, 'funding, long/short y OI de 2 monedas')
     await comprobarLibro(db)
   })
 
@@ -201,7 +201,7 @@ describe('ejecutarMercado (cron)', () => {
     await crearSimulacion(db, { capitalInicial: 10_000, version: 'v1', ahora: 0 })
     const ahora = ahoraDe(0)
     // Técnico claramente alcista y funding de +0,06 % por 8 h (derivados −1): v1 manda MANTENER.
-    const premium = [{ symbol: 'BTCUSDT', lastFundingRate: '0.0006' }]
+    const premium = { BTCUSDT: { symbol: 'BTCUSDT', lastFundingRate: '0.0006' } }
     await ejecutarMercado({ env: entorno(db), fetch: fetchEscenario(crearEscenario(), ahora, { premium }), ahora })
     const btc = await db.prepare("SELECT veredicto, motivo, accion FROM decisiones WHERE simbolo = 'BTC'").first()
     assert.deepEqual(btc, { veredicto: 'MANTENER', motivo: 'contradiccion_tecnico_derivados', accion: 'ninguna' })
@@ -209,13 +209,15 @@ describe('ejecutarMercado (cron)', () => {
     assert.equal(eth, 'abierta', 'ETH no tiene funding en la respuesta: derivados ausentes')
   })
 
-  test('presupuesto §9 con 5 monedas: 34 subpeticiones externas y como mucho 17 llamadas a D1', async () => {
+  test('presupuesto §9 con 5 monedas: 38 subpeticiones externas y como mucho 17 llamadas a D1', async () => {
     const db = crearD1()
     const ahora = ahoraDe(0)
     const fetch = fetchEscenario(crearEscenario(), ahora)
     const env = { ...entorno(db, 'BTC,ETH,SOL,BNB,XRP'), GROQ_API_KEY: 'g', GEMINI_API_KEY: 'k' }
     await ejecutarMercado({ env, fetch, ahora })
-    assert.equal(fetch.llamadas.length, 20 + 11 + 1 + 2)
+    assert.equal(fetch.llamadas.length, 20 + 15 + 1 + 2)
+    assert.ok(fetch.llamadas.every((l) => !l.url.endsWith('/fapi/v1/premiumIndex')), 'nunca el premiumIndex de todo el exchange')
+    assert.equal(fetch.llamadas.filter((l) => l.url.includes('EUR&interval=1h&limit=48')).length, 5)
     assert.ok(db.llamadas <= 17, `${db.llamadas} llamadas a D1`)
   })
 })

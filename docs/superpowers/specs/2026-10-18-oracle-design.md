@@ -86,8 +86,8 @@ mismo código se ejecuta en el Worker, en el backtest y en los tests.
 | Fuente | Endpoint | Clave | Uso |
 |---|---|---|---|
 | Velas USDT (indicadores) | `data-api.binance.vision/api/v3/klines` `{SYM}USDT` 1h/4h/1d, `limit=501` (500 cerradas + la vela en curso, como la ventana del backtest) | No | Señal |
-| Velas EUR (ejecución) | ídem `{SYM}EUR` 1h | No | Precios del bot, stops, valoración |
-| Funding | `fapi.binance.com/fapi/v1/premiumIndex` (todas en 1 llamada) | No | Derivados |
+| Velas EUR (ejecución) | ídem `{SYM}EUR` 1h, `limit=48` (47 cerradas: cambio 24 h y ~2 días de stops pendientes) | No | Precios del bot, stops, valoración |
+| Funding | `fapi.binance.com/fapi/v1/premiumIndex?symbol={SYM}USDT` (1 por moneda: la respuesta de todo el exchange pesa ~200 KB) | No | Derivados |
 | Long/short | `fapi.binance.com/futures/data/globalLongShortAccountRatio` 1h | No | Derivados |
 | Open interest | `fapi.binance.com/futures/data/openInterestHist` 1h, 24 puntos | No | Derivados |
 | Fear & Greed | `api.alternative.me/fng/` | No | Ánimo |
@@ -361,7 +361,7 @@ entrada), de la más antigua a la más reciente:
 4. `high ≥ TP` → sale a `TP`.
 
 Todas las salidas aplican deslizamiento y comisión. Si una ejecución falló, la siguiente
-recupera las velas perdidas (se piden 500 velas 1H, ~20 días).
+recupera las velas perdidas (se piden 48 velas 1H EUR: 47 cerradas, ~2 días; ver §13).
 
 Orden por moneda: primero stops, luego decisión sobre la última vela cerrada. Si en la
 misma ejecución se cerró por stop, no se reabre (y aplica el enfriamiento).
@@ -423,8 +423,8 @@ a partir de las filas de D1.
 | KV escrituras: 1.000/día por cuenta (usado por 4 proyectos) | **0**: ORACLE no usa KV | 0 % |
 | D1 escrituras: 100.000/día | ~5 decisiones + ~5 progreso + 1 capital + ~50 titulares/h ≈ 1.700/día | ~1,7 % |
 | D1 lecturas: 5 M/día | consultas indexadas y acotadas | < 1 % |
-| Subpeticiones: 50/invocación | noticias ≈ 19; mercado ≈ 15 + 5 EUR + 11 derivados + 1 F&G + 1 LLM ≈ 33 | bajo límite |
-| CPU: 10 ms/invocación | parsing ligero (regex para RSS, sin librerías XML) | por invocación: si se excede, solo falla esa ejecución de ORACLE |
+| Subpeticiones: 50/invocación | noticias ≈ 19; mercado = 15 velas USDT + 5 EUR + 15 derivados (3 por moneda) + 1 F&G + hasta 2 LLM (Groq, Gemini) = 38 | bajo límite |
+| CPU: 10 ms/invocación | parsing ligero (regex para RSS, sin librerías XML); mercado: ~1,3 MB de JSON de velas (15 × 501 USDT + 5 × 48 EUR) validado y convertido en una sola pasada, funding por moneda en vez de los ~200 KB de todo el exchange; `[observability]` activo para ver la CPU real por invocación en Workers Logs | por invocación: si se excede, solo falla esa ejecución de ORACLE |
 
 Salvaguardas: la PWA solo consulta al abrirse y cada 5 min mientras está visible; las
 velas del gráfico van del navegador a Binance directamente; PIN con bloqueo; sin reintentos
@@ -618,6 +618,9 @@ service worker que cachea solo la estructura de la app (los datos siempre en red
 - LLM caído → léxico local para puntuar; plantilla para explicar.
 - Error de D1 en un batch → se registra; la siguiente ejecución lo reintenta de forma
   natural gracias a la idempotencia.
+- Hueco de ejecuciones de mercado de más de 47 h (se piden 48 velas 1H EUR) → los stops se
+  comprueban solo en las 47 velas cerradas más recientes; las más antiguas del hueco no se
+  revisan. Aceptado: a cambio, cada ejecución parsea ~10 veces menos velas EUR (§9).
 - La API devuelve errores JSON `{error, detalle}`; la PWA muestra los datos que tenga y un
   aviso, nunca una pantalla en blanco.
 

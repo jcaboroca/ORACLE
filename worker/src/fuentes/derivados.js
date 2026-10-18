@@ -1,6 +1,7 @@
 // @ts-check
 // Derivados de Binance Futures (opcionales: fapi responde 451 desde algunas regiones).
-// 1 + 2·n subpeticiones: premiumIndex para todas las monedas y long/short + open interest por moneda.
+// 3·n subpeticiones: premiumIndex, long/short y open interest por moneda. El premiumIndex se pide por símbolo:
+// la respuesta de todo el exchange pesa ~200 KB y parsearla gastaba CPU de la ejecución (spec §9).
 
 /** @typedef {import('../../../core/estrategia-v1.js').Derivados} Derivados */
 /** @typedef {{ funding: number|null, ratioLongShort: number|null, oiCambio24h: number|null }} DerivadosBase */
@@ -14,17 +15,18 @@ const numero = (x) => {
 }
 
 /**
- * Funding por 8 h (fracción) de cada moneda a partir de /fapi/v1/premiumIndex (todas las monedas).
+ * Funding por 8 h (fracción) de una moneda a partir de /fapi/v1/premiumIndex?symbol={SYM}USDT.
  * @param {unknown} json
- * @param {string[]} simbolos
- * @returns {Record<string, number|null>}
+ * @param {string} simbolo
+ * @returns {number}
  */
-export function leerFunding(json, simbolos) {
-  if (!Array.isArray(json)) throw new TypeError('premiumIndex: la respuesta no es una lista')
-  return Object.fromEntries(simbolos.map((s) => {
-    const fila = json.find((f) => f && typeof f === 'object' && f.symbol === `${s}USDT`)
-    return [s, fila ? numero(fila.lastFundingRate) : null]
-  }))
+export function leerFunding(json, simbolo) {
+  if (!json || typeof json !== 'object' || Array.isArray(json)) throw new TypeError('premiumIndex: la respuesta no es un objeto')
+  const fila = /** @type {Record<string, unknown>} */ (json)
+  if (fila.symbol !== `${simbolo}USDT`) throw new TypeError('premiumIndex: respuesta de otra moneda')
+  const funding = numero(fila.lastFundingRate)
+  if (funding === null) throw new TypeError('premiumIndex: funding no válido')
+  return funding
 }
 
 /**
@@ -76,23 +78,20 @@ const mensaje = (e) => (e instanceof Error ? e.message : String(e))
 export async function descargarDerivados(fetch, simbolos) {
   /** @type {string[]} */
   const fallos = []
-  const [funding, ...porMoneda] = await Promise.allSettled([
-    pedirJson(fetch, `${FAPI}/fapi/v1/premiumIndex`).then((j) => leerFunding(j, simbolos)),
-    ...simbolos.flatMap((s) => [
-      pedirJson(fetch, `${FAPI}/futures/data/globalLongShortAccountRatio?symbol=${s}USDT&period=1h&limit=1`).then(leerLongShort),
-      pedirJson(fetch, `${FAPI}/futures/data/openInterestHist?symbol=${s}USDT&period=1h&limit=25`).then(leerOpenInterest),
-    ]),
-  ])
-  if (funding.status === 'rejected') fallos.push(`derivados funding: ${mensaje(funding.reason)}`)
+  const porMoneda = await Promise.allSettled(simbolos.flatMap((s) => [
+    pedirJson(fetch, `${FAPI}/fapi/v1/premiumIndex?symbol=${s}USDT`).then((j) => leerFunding(j, s)),
+    pedirJson(fetch, `${FAPI}/futures/data/globalLongShortAccountRatio?symbol=${s}USDT&period=1h&limit=1`).then(leerLongShort),
+    pedirJson(fetch, `${FAPI}/futures/data/openInterestHist?symbol=${s}USDT&period=1h&limit=25`).then(leerOpenInterest),
+  ]))
   /** @type {Record<string, DerivadosBase>} */
   const base = {}
   simbolos.forEach((s, i) => {
-    const ls = porMoneda[2 * i]
-    const oi = porMoneda[2 * i + 1]
+    const [funding, ls, oi] = porMoneda.slice(3 * i, 3 * i + 3)
+    if (funding.status === 'rejected') fallos.push(`derivados funding ${s}: ${mensaje(funding.reason)}`)
     if (ls.status === 'rejected') fallos.push(`derivados long/short ${s}: ${mensaje(ls.reason)}`)
     if (oi.status === 'rejected') fallos.push(`derivados open interest ${s}: ${mensaje(oi.reason)}`)
     base[s] = {
-      funding: funding.status === 'fulfilled' ? funding.value[s] : null,
+      funding: funding.status === 'fulfilled' ? funding.value : null,
       ratioLongShort: ls.status === 'fulfilled' ? ls.value : null,
       oiCambio24h: oi.status === 'fulfilled' ? oi.value : null,
     }

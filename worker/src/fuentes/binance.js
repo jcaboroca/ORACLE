@@ -1,6 +1,7 @@
 // @ts-check
-// Velas de Binance desde el mirror público data-api.binance.vision. Cada fila se valida antes de convertirla.
-import { cerradasHasta, desdeBinance } from '../../../core/velas.js'
+// Velas de Binance desde el mirror público data-api.binance.vision. Cada fila se valida mientras se convierte
+// (una sola pasada: el parseo es lo que más CPU gasta de la ejecución de mercado, spec §9).
+import { cerradasHasta } from '../../../core/velas.js'
 
 /** @typedef {import('../../../core/velas.js').Vela} Vela */
 
@@ -11,30 +12,50 @@ export const VENTANA = 500
 export const LIMITE_VELAS = VENTANA + 1
 
 /**
- * Comprueba que la respuesta de /klines es una lista de filas coherentes y ordenadas.
- * @param {unknown} json
- * @returns {unknown[][]}
+ * Velas 1H EUR que se piden (47 cerradas + la vela en curso): bastan para el cambio 24 h (25 cerradas) y para
+ * recuperar los stops de ~2 días de ejecuciones perdidas. Con un hueco mayor de 47 h sin ejecuciones, las
+ * velas más antiguas del hueco no se revisan (spec §7.4 y §13).
  */
-export function validarKlines(json) {
+export const LIMITE_EUR = 48
+
+/**
+ * Valida la respuesta de /klines (lista de filas coherentes y ordenadas) y la convierte en velas, todo en
+ * una pasada: cada campo se convierte a número una sola vez. Mismo resultado que desdeBinance de core/velas.js.
+ * @param {unknown} json
+ * @returns {Vela[]}
+ */
+export function leerKlines(json) {
   if (!Array.isArray(json)) throw new TypeError('klines: la respuesta no es una lista')
+  /** @type {Vela[]} */
+  const velas = new Array(json.length)
   let previa = -Infinity
-  for (const fila of json) {
+  for (let i = 0; i < json.length; i++) {
+    const fila = json[i]
     if (!Array.isArray(fila) || fila.length < 7) throw new TypeError('klines: fila mal formada')
-    const [inicio, apertura, maximo, minimo, cierre, volumen, cierreMs] = fila.slice(0, 7).map(Number)
+    const inicio = Number(fila[0])
+    const apertura = Number(fila[1])
+    const maximo = Number(fila[2])
+    const minimo = Number(fila[3])
+    const cierre = Number(fila[4])
+    const volumen = Number(fila[5])
+    const cierreMs = Number(fila[6])
     if (!Number.isInteger(inicio) || !Number.isInteger(cierreMs) || cierreMs <= inicio) {
       throw new TypeError('klines: tiempos no válidos')
     }
-    if (![apertura, maximo, minimo, cierre].every((x) => Number.isFinite(x) && x > 0)) {
+    // `!(x > 0)` también rechaza NaN; y ±Infinity no es finito.
+    if (!(apertura > 0 && maximo > 0 && minimo > 0 && cierre > 0)
+      || !Number.isFinite(apertura + maximo + minimo + cierre)) {
       throw new TypeError('klines: precio no válido')
     }
-    if (!Number.isFinite(volumen) || volumen < 0) throw new TypeError('klines: volumen no válido')
-    if (maximo < Math.max(apertura, cierre, minimo) || minimo > Math.min(apertura, cierre)) {
+    if (!(volumen >= 0) || !Number.isFinite(volumen)) throw new TypeError('klines: volumen no válido')
+    if (maximo < apertura || maximo < cierre || maximo < minimo || minimo > apertura || minimo > cierre) {
       throw new TypeError('klines: OHLC incoherente')
     }
     if (inicio <= previa) throw new TypeError('klines: velas desordenadas o repetidas')
     previa = inicio
+    velas[i] = { inicio, fin: cierreMs + 1, apertura, maximo, minimo, cierre, volumen }
   }
-  return /** @type {unknown[][]} */ (json)
+  return velas
 }
 
 /**
@@ -47,18 +68,22 @@ export function validarKlines(json) {
 export async function descargarVelas(fetch, par, intervalo, limite = LIMITE_VELAS) {
   const res = await fetch(`${BINANCE}?symbol=${par}&interval=${intervalo}&limit=${limite}`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return desdeBinance(validarKlines(await res.json()))
+  return leerKlines(await res.json())
 }
 
 /**
- * Las 4 series de una moneda (4 subpeticiones). Una serie que falla queda vacía y se anota.
+ * Las 4 series de una moneda (4 subpeticiones): USDT 1h/4h/1d con LIMITE_VELAS y EUR 1h con LIMITE_EUR.
+ * Una serie que falla queda vacía y se anota.
  * @param {typeof fetch} fetch
  * @param {string} simbolo
  */
 export async function descargarMoneda(fetch, simbolo) {
-  /** @type {[string, '1h'|'4h'|'1d'][]} */
-  const pedidos = [[`${simbolo}USDT`, '1h'], [`${simbolo}USDT`, '4h'], [`${simbolo}USDT`, '1d'], [`${simbolo}EUR`, '1h']]
-  const resultados = await Promise.allSettled(pedidos.map(([par, intervalo]) => descargarVelas(fetch, par, intervalo)))
+  /** @type {[string, '1h'|'4h'|'1d', number][]} */
+  const pedidos = [
+    [`${simbolo}USDT`, '1h', LIMITE_VELAS], [`${simbolo}USDT`, '4h', LIMITE_VELAS], [`${simbolo}USDT`, '1d', LIMITE_VELAS],
+    [`${simbolo}EUR`, '1h', LIMITE_EUR],
+  ]
+  const resultados = await Promise.allSettled(pedidos.map(([par, intervalo, limite]) => descargarVelas(fetch, par, intervalo, limite)))
   /** @type {string[]} */
   const fallos = []
   /** @param {number} i @returns {Vela[]} */
