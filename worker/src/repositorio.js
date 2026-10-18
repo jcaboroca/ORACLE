@@ -314,3 +314,79 @@ export async function senalesActuales(db) {
   const { results } = await db.prepare('SELECT simbolo, senal_json FROM senales_actuales').all()
   return Object.fromEntries(results.map((f) => [f.simbolo, JSON.parse(f.senal_json)]))
 }
+
+// ── Lecturas de la API ───────────────────────────────────────────────────────
+
+/** Último Fear & Greed guardado por una ejecución de mercado o manual. @param {D1} db */
+export async function ultimoFng(db) {
+  const fila = await db.prepare(
+    `SELECT detalle_json FROM ejecuciones WHERE tipo IN ('mercado', 'manual') AND json_extract(detalle_json, '$.fng') IS NOT NULL
+     ORDER BY inicio DESC, id DESC LIMIT 1`,
+  ).first()
+  return fila ? /** @type {import('./fuentes/fng.js').Fng} */ (JSON.parse(fila.detalle_json).fng) : null
+}
+
+/**
+ * Último punto de capital y número de posiciones abiertas (1 llamada).
+ * @param {D1} db @param {number} simulacionId
+ */
+export async function resumenBot(db, simulacionId) {
+  const [capital, abiertas] = await db.batch([
+    db.prepare('SELECT * FROM capital WHERE simulacion_id = ? ORDER BY vela_1h DESC LIMIT 1').bind(simulacionId),
+    db.prepare("SELECT COUNT(*) AS n FROM posiciones WHERE simulacion_id = ? AND estado = 'abierta'").bind(simulacionId),
+  ])
+  return { capital: capital.results[0] ?? null, abiertas: /** @type {number} */ (abiertas.results[0].n) }
+}
+
+/**
+ * Todo lo que necesita GET /api/bot (1 llamada): posiciones abiertas, último precio EUR visto por
+ * moneda (el de su última decisión con precio), operaciones y curva de capital completa.
+ * @param {D1} db @param {number} simulacionId
+ */
+export async function datosBot(db, simulacionId) {
+  const [abiertas, precios, operaciones, curva] = await db.batch([
+    db.prepare("SELECT * FROM posiciones WHERE simulacion_id = ? AND estado = 'abierta' ORDER BY id").bind(simulacionId),
+    db.prepare(
+      `SELECT d.simbolo, d.precio FROM decisiones d
+       JOIN (SELECT simbolo, MAX(vela_1h) AS vela FROM decisiones WHERE simulacion_id = ? AND precio IS NOT NULL GROUP BY simbolo) u
+         ON u.simbolo = d.simbolo AND u.vela = d.vela_1h
+       WHERE d.simulacion_id = ?`,
+    ).bind(simulacionId, simulacionId),
+    db.prepare('SELECT lado, simbolo, comision, deslizamiento, pnl_neto FROM operaciones WHERE simulacion_id = ? ORDER BY id')
+      .bind(simulacionId),
+    db.prepare('SELECT vela_1h, valor_cartera, saldo, valor_hodl FROM capital WHERE simulacion_id = ? ORDER BY vela_1h')
+      .bind(simulacionId),
+  ])
+  return {
+    abiertas: abiertas.results,
+    precios: /** @type {Record<string, number>} */ (Object.fromEntries(precios.results.map((p) => [p.simbolo, p.precio]))),
+    operaciones: operaciones.results,
+    curva: curva.results,
+  }
+}
+
+/**
+ * Titulares de una moneda o de MERCADO en (desde, hasta], los más recientes primero.
+ * @param {D1} db @param {string} simbolo @param {number} desde @param {number} hasta @param {number} limite
+ */
+export async function titularesDeMoneda(db, simbolo, desde, hasta, limite) {
+  return (await db.prepare(
+    `SELECT * FROM titulares WHERE publicado_en > ? AND publicado_en <= ?
+       AND (monedas_json LIKE ? OR monedas_json LIKE '%"MERCADO"%') ORDER BY publicado_en DESC LIMIT ?`,
+  ).bind(desde, hasta, `%"${simbolo}"%`, limite).all()).results
+}
+
+/**
+ * Página de una tabla por id descendente. Pide limite + 1 filas para saber si hay más.
+ * @param {D1} db @param {'decisiones'|'operaciones'} tabla
+ * @param {{ simulacionId: number, simbolo: string|null, cursor: number|null, limite: number }} filtro
+ * @returns {Promise<{ filas: any[], siguienteCursor: number|null }>}
+ */
+export async function pagina(db, tabla, { simulacionId, simbolo, cursor, limite }) {
+  const { results } = await db.prepare(
+    `SELECT * FROM ${tabla} WHERE simulacion_id = ? AND (? IS NULL OR simbolo = ?) AND (? IS NULL OR id < ?)
+     ORDER BY id DESC LIMIT ?`,
+  ).bind(simulacionId, simbolo, simbolo, cursor, cursor, limite + 1).all()
+  const filas = results.slice(0, limite)
+  return { filas, siguienteCursor: results.length > limite ? filas[filas.length - 1].id : null }
+}
