@@ -31,8 +31,8 @@ y `calcularSenal`) registrado en `core/estrategias.js`. Cada simulación guarda 
 | `v2` | La señal de v1 + solo compra con el cierre diario sobre la EMA200 diaria; decide una vez al día (00:03 UTC); los stops se siguen revisando cada hora | Disponible, no activa |
 
 v2 se eligió con un protocolo walk-forward (entrenamiento 2022-10 → 2024-10, prueba 2024-10 →
-2026-10) y **no superó a v1 en el periodo de prueba** (−22,8 % frente a −18,2 %; comprar y
-mantener: +23,3 %), así que v1 sigue activa. Detalle, tabla y limitaciones en la spec §6.6.
+2026-10) y **no superó a v1 en el periodo de prueba** (−23,1 % frente a −18,5 % con la ventana
+de 299 velas; comprar y mantener: +23,3 %), así que v1 sigue activa. Detalle, tabla y limitaciones en la spec §6.6.
 Ninguna de las dos bate a comprar y mantener en el histórico: no es garantía de nada.
 
 ## Backtest

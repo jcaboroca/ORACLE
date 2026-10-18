@@ -238,8 +238,8 @@ Solo en extremos, a la contra: valor < 20 → +0,5; > 80 → −0,5; resto 0.
 
 ### 6.6 Estrategia v2
 
-Motivo: el backtest de v1 (2024-10-18 → 2026-10-18) dio −18,5 % frente a +20,3 % de comprar
-y mantener, con 718 operaciones (6,9/semana), ~2.000 € de costes sobre 10.000 € y los 359
+Motivo: el backtest de v1 (2024-10-18 → 2026-10-18, ventana de 500 velas) dio −18,5 % frente a
++20,3 % de comprar y mantener, con 718 operaciones (6,9/semana), ~2.000 € de costes sobre 10.000 € y los 359
 cierres por stop-loss/take-profit (ninguno por VENDER). v2 se eligió **con datos y un
 protocolo declarado antes de mirar el periodo de prueba**, no a ojo.
 
@@ -287,26 +287,31 @@ llega a cerrarse por señal, así que la regla de salida no influye; se conserva
 
 | Periodo | Estrategia | Rentabilidad neta | Drawdown máx. | Operaciones (por semana) |
 |---|---|---|---|---|
-| TRAIN | v1 | −13,23 % | 25,52 % | 760 (7,3) |
-| TRAIN | **v2** | **+9,61 %** | **14,86 %** | 474 (4,5) |
+| TRAIN | v1 | −13,50 % | 25,15 % | 760 (7,3) |
+| TRAIN | **v2** | **+6,86 %** | **14,86 %** | 482 (4,6) |
 | TRAIN | Comprar y mantener | +145,05 % | 42,65 % | — |
-| TEST | v1 | −18,24 % | 35,49 % | 716 (6,9) |
-| TEST | **v2** | **−22,84 %** | **39,43 %** | 458 (4,4) |
+| TEST | v1 | −18,47 % | 35,67 % | 706 (6,8) |
+| TEST | **v2** | **−23,05 %** | **39,59 %** | 458 (4,4) |
 | TEST | Comprar y mantener | +23,26 % | 64,49 % | — |
 
-Robustez (no usada para elegir): las 5 mejores de TRAIN según el criterio dieron en TEST
-−22,84 % (las cuatro de cadencia diaria) y −26,50 % (cadencia 4 h).
+Ventana: la tabla está regenerada con la ventana de **299 velas** cerradas (`VENTANA`, al pasar el
+Worker a OKX, §4 y §8). La rejilla y la elección se hicieron con la ventana original de 500 velas, que
+daba TRAIN v1 −13,23 % / v2 +9,61 % y TEST v1 −18,24 % / v2 −22,84 %; no se repitieron. Con 299 velas
+las cifras apenas cambian (la EMA200 1D se calienta con menos historia) y la decisión es la misma.
+
+Robustez (no usada para elegir; rejilla con la ventana de 500 velas): las 5 mejores de TRAIN según
+el criterio dieron en TEST −22,84 % (las cuatro de cadencia diaria) y −26,50 % (cadencia 4 h).
 
 **Decisión: `ESTRATEGIA_ACTIVA` sigue siendo `'v1'`**, porque v2 no superó a v1 en TEST
-(−22,84 % < −18,24 %). v2 queda registrada y disponible (`npm run backtest -- --estrategia
-v2`) pero las simulaciones nuevas usan v1.
+(−23,05 % < −18,47 % con 299 velas; −22,84 % < −18,24 % con 500). v2 queda registrada y
+disponible (`npm run backtest -- --estrategia v2`) pero las simulaciones nuevas usan v1.
 
 **Limitaciones (honestas):**
 
 - Ninguna de las dos estrategias bate a comprar y mantener en ningún periodo, y un backtest
   **no es garantía de resultados futuros**.
 - Riesgo de sobreajuste: el resultado positivo de v2 en TRAIN depende sobre todo de SOL
-  (+1.888 € realizados; las otras cuatro monedas suman −942 €) y no se repitió en TEST.
+  (+1.888 € realizados; las otras cuatro monedas suman −942 €, con la ventana de 500 velas) y no se repitió en TEST.
   Que el filtro de régimen apenas actúe (en TEST no cambia ninguna operación: un S ≥ 0,35
   ya implica casi siempre cierre 1D sobre la EMA200) indica que la mejora en TRAIN vino de
   la cadencia, no de una ventaja robusta.
