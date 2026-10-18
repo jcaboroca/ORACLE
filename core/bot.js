@@ -1,7 +1,7 @@
 // @ts-check
 // Bot de paper trading: transición pura de estado. No toca red ni base de datos;
 // el Worker y el backtest persisten los eventos que devuelve.
-import { HORA } from './velas.js'
+import { HORA, cerradasHasta } from './velas.js'
 
 /** @typedef {import('./velas.js').Vela} Vela */
 /**
@@ -103,11 +103,13 @@ export function salidaEnVela(pos, v) {
  * Procesa una moneda en una ejecución horaria: primero stops, luego la señal.
  * @param {Estado} estadoPrevio
  * @param {{ simbolo: string, velasEur: Vela[], senal: SenalBot, ahora: number, valorCartera: number }} entrada
- *   velasEur: velas 1H EUR cerradas en `ahora`, ordenadas.
+ *   velasEur: velas 1H EUR ordenadas; se descarta la que siga abierta en `ahora`.
  * @returns {{ estado: Estado, eventos: Evento[], decision: Decision }}
  */
-export function pasoMoneda(estadoPrevio, { simbolo, velasEur, senal, ahora, valorCartera: valor }) {
+export function pasoMoneda(estadoPrevio, { simbolo, velasEur: todasEur, senal, ahora, valorCartera: valor }) {
   const p = PARAMETROS_BOT
+  // La vela en curso no cuenta: si se revisara ahora, su cierre posterior nunca se comprobaría.
+  const velasEur = cerradasHasta(todasEur, ahora)
   /** @type {Estado} */
   const estado = structuredClone(estadoPrevio)
   /** @type {Evento[]} */

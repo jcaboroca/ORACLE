@@ -190,6 +190,42 @@ describe('stops', () => {
     assert.equal(r1.eventos.length, 1)
     assert.equal(r2.eventos.length, 0)
   })
+  test('ignora la vela EUR en curso: no avanza ultimaRevisada y el stop se ejecuta cuando cierra', () => {
+    const e = conPosicion()
+    const sl = e.posiciones.BTC.stopLoss
+    const enCurso = vela(T + HORA, { o: 100, h: 100, l: sl - 1, c: 99 })
+    assert.ok(enCurso.fin > AHORA)
+    const r1 = pasoMoneda(e, {
+      simbolo: 'BTC', velasEur: [vela(T, plana(100)), enCurso], senal: senal({ veredicto: 'MANTENER' }), ahora: AHORA, valorCartera: 10_000,
+    })
+    assert.equal(r1.eventos.length, 0)
+    assert.equal(r1.estado.ultimaRevisada.BTC, T)
+    assert.equal(r1.decision.precio, 100)
+    const r2 = pasoMoneda(r1.estado, {
+      simbolo: 'BTC', velasEur: [vela(T, plana(100)), enCurso], senal: senal({ veredicto: 'MANTENER' }), ahora: AHORA + HORA, valorCartera: 10_000,
+    })
+    assert.equal(r2.eventos.length, 1)
+    assert.equal(r2.eventos[0].motivo, 'stop_loss')
+    assert.equal(r2.eventos[0].vela, T + HORA)
+    assert.equal(r2.estado.ultimaRevisada.BTC, T + HORA)
+  })
+  test('los stops se comprueban aunque la señal sea SIN_DATOS o los datos estén desactualizados', () => {
+    const e = conPosicion()
+    const sl = e.posiciones.BTC.stopLoss
+    const velasEur = [vela(T + HORA, { o: 100, h: 100, l: sl - 1, c: 99 })]
+    const r1 = pasoMoneda(e, {
+      simbolo: 'BTC', velasEur, senal: senal({ veredicto: 'SIN_DATOS' }), ahora: AHORA + HORA, valorCartera: 10_000,
+    })
+    assert.equal(r1.eventos.length, 1)
+    assert.equal(r1.eventos[0].motivo, 'stop_loss')
+    assert.equal(r1.decision.motivo, 'sin_datos')
+    const r2 = pasoMoneda(e, {
+      simbolo: 'BTC', velasEur, senal: senal({ veredicto: 'MANTENER', fresca: false }), ahora: AHORA + HORA, valorCartera: 10_000,
+    })
+    assert.equal(r2.eventos.length, 1)
+    assert.equal(r2.eventos[0].motivo, 'stop_loss')
+    assert.equal(r2.decision.motivo, 'datos_desactualizados')
+  })
 })
 
 describe('valoración y comprar y mantener', () => {
