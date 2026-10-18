@@ -44,6 +44,10 @@ describe('ejecutarBacktest', () => {
     assert.equal(r.variante, 'tecnico+fng')
     assert.equal(r.version, 'v1')
   })
+  test('registra la ventana de velas en los parámetros', () => {
+    assert.equal(r.parametros.ventana, 500)
+    assert.equal(ejecutarBacktest({ series, fng, desde, hasta: desde + DIA, ventana: 300 }).parametros.ventana, 300)
+  })
   test('opera y la contabilidad cuadra: valor = saldo + abiertas', () => {
     assert.ok(r.metricas.operaciones > 0)
     assert.ok(r.metricas.saldo >= 0)

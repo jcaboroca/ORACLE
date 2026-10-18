@@ -1,7 +1,8 @@
 // @ts-check
-// Backtest hora a hora con el mismo motor que el Worker. Solo ve velas cerradas.
-import { PARAMETROS_BOT, crearHodl, estadoInicial, pasoMoneda, valorCartera, valorHodl } from './bot.js'
-import { PARAMETROS, VERSION, calcularSenal } from './estrategia-v1.js'
+// Backtest hora a hora con el mismo paso horario que el Worker (core/hora.js). Solo ve velas cerradas.
+import { PARAMETROS_BOT, estadoInicial } from './bot.js'
+import { PARAMETROS, VERSION } from './estrategia-v1.js'
+import { ejecutarHora } from './hora.js'
 import { calcularMetricas, metricasPorMoneda } from './metricas.js'
 import { HORA } from './velas.js'
 
@@ -33,41 +34,43 @@ export function ejecutarBacktest({ series, fng, desde, hasta, capitalInicial = 1
 
   for (let h = Math.ceil(desde / HORA) * HORA; h + MINUTO_CRON <= hasta; h += HORA) {
     const ahora = h + MINUTO_CRON
-    /** @type {Record<string, number>} */
-    const precios = {}
     for (const m of monedas) {
       const p = punteros[m]
       for (const tf of /** @type {(keyof SerieMoneda)[]} */ (['1h', '4h', '1d', 'eur'])) {
         const velas = series[m][tf]
         while (p[tf] < velas.length && velas[p[tf]].fin <= ahora) p[tf]++
       }
-      if (p.eur > 0) precios[m] = series[m].eur[p.eur - 1].cierre
     }
     while (punteroFng < fng.length && fng[punteroFng].t <= ahora) punteroFng++
     const valorFng = punteroFng > 0 ? fng[punteroFng - 1].valor : null
 
-    if (hodl === null && Object.keys(precios).length === monedas.length) hodl = crearHodl(capitalInicial, precios)
-
-    const valor = valorCartera(estado, precios)
-    for (const m of monedas) {
-      const p = punteros[m]
-      /** @param {keyof SerieMoneda} tf @param {number} n */
-      const ultimas = (tf, n) => series[m][tf].slice(Math.max(0, p[tf] - n), p[tf])
-      const senal = calcularSenal({
-        simbolo: m,
-        ahora,
-        velas: { '1h': ultimas('1h', ventana), '4h': ultimas('4h', ventana), '1d': ultimas('1d', ventana) },
-        derivados: null,
-        titulares: [],
-        fng: valorFng,
-      })
-      const paso = pasoMoneda(estado, { simbolo: m, velasEur: ultimas('eur', 24), senal, ahora, valorCartera: valor })
-      estado = paso.estado
-      for (const { posicion: _, ...ev } of paso.eventos) operaciones.push(ev)
-      const clave = `${paso.decision.veredicto}:${paso.decision.motivo}`
+    const hora = ejecutarHora({
+      estado,
+      hodl,
+      capitalInicial,
+      ahora,
+      monedas: monedas.map((m) => {
+        const p = punteros[m]
+        /** @param {keyof SerieMoneda} tf @param {number} n */
+        const ultimas = (tf, n) => series[m][tf].slice(Math.max(0, p[tf] - n), p[tf])
+        return {
+          simbolo: m,
+          velas: { '1h': ultimas('1h', ventana), '4h': ultimas('4h', ventana), '1d': ultimas('1d', ventana) },
+          velasEur: ultimas('eur', 24),
+          derivados: null,
+        }
+      }),
+      titulares: [],
+      fng: valorFng,
+    })
+    estado = hora.estado
+    hodl = hora.hodl
+    for (const { posicion: _, ...ev } of hora.eventos) operaciones.push(ev)
+    for (const d of hora.decisiones) {
+      const clave = `${d.veredicto}:${d.motivo}`
       decisiones[clave] = (decisiones[clave] ?? 0) + 1
     }
-    curva.push({ t: ahora, valor: valorCartera(estado, precios), hodl: hodl ? valorHodl(hodl, precios) : null })
+    curva.push(hora.punto)
   }
 
   const preciosFinales = Object.fromEntries(monedas.map((m) => {
@@ -83,7 +86,7 @@ export function ejecutarBacktest({ series, fng, desde, hasta, capitalInicial = 1
   return {
     version: VERSION,
     variante: 'tecnico+fng',
-    parametros: { estrategia: PARAMETROS, bot: PARAMETROS_BOT },
+    parametros: { estrategia: PARAMETROS, bot: PARAMETROS_BOT, ventana },
     desde,
     hasta,
     capitalInicial,
