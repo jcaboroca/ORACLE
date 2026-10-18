@@ -8,7 +8,7 @@ import { HORA } from '../../core/velas.js'
 import {
   CURVA_MAXIMA, ESPERA_ANALIZAR_MS, TAMANO_PAGINA, atender, limitarCurva, primeraFrase, submuestrearCurva,
 } from '../src/api.js'
-import { BLOQUEO_MS, MAX_FALLOS_GLOBAL, VENTANA_GLOBAL_MS, compararSeguro } from '../src/auth.js'
+import { BLOQUEO_MS, MAX_FALLOS_GLOBAL, REINTENTAR_EN_S, VENTANA_GLOBAL_MS, VUELO_MS, compararSeguro } from '../src/auth.js'
 import { ejecutarMercado } from '../src/ejecuciones/mercado.js'
 import { crearSimulacion, guardarCapital, guardarPuntuaciones, insertarTitulares } from '../src/repositorio.js'
 import { simularFetch } from './ayudantes.js'
@@ -102,7 +102,7 @@ describe('PIN, bloqueo y CORS', () => {
   test('ráfaga en paralelo desde una IP: como mucho 5 PIN comparados; el resto, 429 sin comparar (ni el correcto)', async () => {
     const db = crearD1({ latencia: true })
     const ahora = ahoraDe(6)
-    // 20 a la vez; la 11.ª lleva el PIN correcto: llega tras 5 reservas y no debe ni compararse.
+    // 20 a la vez; la 11.ª lleva el PIN correcto: llega con 5 intentos ya en vuelo y no debe ni compararse.
     const pines = Array.from({ length: 20 }, (_, i) => (i === 10 ? PIN : `00${i}`))
     const r = await Promise.all(pines.map((pin) => pedir(db, '/api/simulaciones', { pin, ahora })))
     assert.deepEqual(r.slice(0, 4).map((x) => x.cuerpo.detalle), [
@@ -110,10 +110,43 @@ describe('PIN, bloqueo y CORS', () => {
       'PIN incorrecto. Quedan 1 intentos.',
     ])
     assert.equal(r.filter((x) => x.estado === 401).length, 4, '4 fallos con 401 y el 5.º ya bloquea')
+    assert.deepEqual(r[4].cuerpo, {
+      error: 'bloqueado', detalle: 'Demasiados intentos con PIN incorrecto. Espera y vuelve a probar.', hasta: ahora + BLOQUEO_MS,
+    })
+    assert.ok(r.slice(5).every((x) => x.estado === 429 && x.cuerpo.error === 'ocupado'), 'el resto, sin comparar: reintento corto')
     assert.equal(r[10].estado, 429, 'el PIN correcto llegó con la IP ya agotada')
-    assert.ok(r.slice(4).every((x) => x.estado === 429 && x.cuerpo.hasta === ahora + BLOQUEO_MS))
-    assert.equal((await pedir(db, '/api/simulaciones', { ahora: ahora + 60_000 })).estado, 429)
+    const fila = await db.prepare('SELECT fallos, en_vuelo FROM intentos_pin').first()
+    assert.deepEqual({ ...fila }, { fallos: 5, en_vuelo: 0 }, 'solo se compararon 5 PIN')
+    const despues = await pedir(db, '/api/simulaciones', { ahora: ahora + 60_000 })
+    assert.equal(despues.estado, 429)
+    assert.equal(despues.cuerpo.error, 'bloqueado', 'ahora sí, el bloqueo de 15 min')
     assert.equal((await pedir(db, '/api/simulaciones', { ahora: ahora + BLOQUEO_MS })).estado, 200)
+  })
+
+  test('6 peticiones a la vez con el PIN correcto desde una IP: 200 o reintento corto, nunca el bloqueo', async () => {
+    const db = crearD1({ latencia: true })
+    const ahora = ahoraDe(6)
+    const r = await Promise.all(Array.from({ length: 6 }, () => pedir(db, '/api/simulaciones', { ahora })))
+    assert.ok(r.every((x) => x.estado === 200 || x.cuerpo.error === 'ocupado'), JSON.stringify(r.map((x) => x.cuerpo.error ?? x.estado)))
+    assert.ok(r.filter((x) => x.estado === 200).length >= 5)
+    const ocupado = r.find((x) => x.estado === 429)
+    if (ocupado) {
+      assert.deepEqual(ocupado.cuerpo, {
+        error: 'ocupado', detalle: 'Hay otros intentos de PIN en curso. Vuelve a probar en unos segundos.', reintentar_en: REINTENTAR_EN_S,
+      })
+    }
+    assert.equal(await db.prepare('SELECT COUNT(*) AS n FROM intentos_pin').first('n'), 0, 'los aciertos no dejan rastro')
+    const siguiente = await Promise.all(Array.from({ length: 6 }, () => pedir(db, '/api/simulaciones', { ahora: ahora + 2_000 })))
+    assert.ok(siguiente.every((x) => x.estado === 200 || x.cuerpo.error === 'ocupado'))
+  })
+
+  test(`una reserva que nunca se libera (invocación caída) caduca a los ${VUELO_MS / 1000} s`, async () => {
+    const db = crearD1()
+    const ahora = ahoraDe(6)
+    await db.prepare('INSERT INTO intentos_pin (ip, fallos, bloqueado_hasta, en_vuelo, vuelo_hasta) VALUES (?, 0, NULL, 5, ?)')
+      .bind('1.2.3.4', ahora + VUELO_MS).run()
+    assert.equal((await pedir(db, '/api/simulaciones', { ahora })).cuerpo.error, 'ocupado')
+    assert.equal((await pedir(db, '/api/simulaciones', { ahora: ahora + VUELO_MS })).estado, 200)
   })
 
   test('caducado el bloqueo, la IP vuelve a tener 5 intentos', async () => {
@@ -130,10 +163,12 @@ describe('PIN, bloqueo y CORS', () => {
     const ahora = ahoraDe(6)
     // Una IP distinta por intento (rotación de IPs contra un PIN de 4 cifras), todos a la vez.
     const r = await Promise.all(Array.from({ length: 60 }, (_, i) => pedir(db, '/api/simulaciones', { pin: 'x', ip: `10.0.0.${i}`, ahora })))
-    assert.equal(r.filter((x) => x.estado === 401).length, MAX_FALLOS_GLOBAL, `solo ${MAX_FALLOS_GLOBAL} se comparan`)
-    const resto = r.filter((x) => x.estado === 429)
-    assert.equal(resto.length, 60 - MAX_FALLOS_GLOBAL)
-    assert.ok(resto.every((x) => x.cuerpo.error === 'bloqueado' && x.cuerpo.hasta === ahora + BLOQUEO_MS))
+    assert.equal(await db.prepare('SELECT fallos FROM pin_global').first('fallos'), MAX_FALLOS_GLOBAL, `solo ${MAX_FALLOS_GLOBAL} se comparan`)
+    const comparados = r.filter((x) => x.estado === 401 || x.cuerpo.error === 'bloqueado')
+    assert.equal(comparados.length, MAX_FALLOS_GLOBAL)
+    assert.ok(comparados.filter((x) => x.estado === 429).every((x) => x.cuerpo.hasta === ahora + BLOQUEO_MS && /en total/.test(x.cuerpo.detalle)))
+    const resto = r.filter((x) => x.cuerpo.error === 'ocupado')
+    assert.equal(resto.length, 60 - MAX_FALLOS_GLOBAL, 'los que llegaron con 50 en vuelo: reintento corto, sin comparar')
     const dueno = await pedir(db, '/api/simulaciones', { ip: '9.9.9.9', ahora: ahora + 60_000 })
     assert.equal(dueno.estado, 429, 'ni con el PIN correcto desde otra IP')
     assert.match(dueno.cuerpo.detalle, /en total/)

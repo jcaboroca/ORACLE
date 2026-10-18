@@ -115,7 +115,7 @@ describe('ejecutarNoticias', () => {
     await db.prepare("INSERT INTO titulares (id, fuente, origen, titulo, publicado_en) VALUES ('viejo', 'X', 'rss', 'Viejo', ?)")
       .bind(AHORA - 8 * DIA).run()
     await db.prepare("INSERT INTO ejecuciones (tipo, inicio) VALUES ('mercado', ?)").bind(AHORA - 31 * DIA).run()
-    await db.prepare("INSERT INTO intentos_pin VALUES ('1.1.1.1', 0, ?), ('2.2.2.2', 0, ?)").bind(AHORA - 1, AHORA + HORA).run()
+    await db.prepare("INSERT INTO intentos_pin (ip, fallos, bloqueado_hasta) VALUES ('1.1.1.1', 0, ?), ('2.2.2.2', 0, ?)").bind(AHORA - 1, AHORA + HORA).run()
     await ejecutarNoticias({ env: { DB: db }, fetch: fetchFixtures(), ahora: AHORA })
     assert.equal(await db.prepare("SELECT COUNT(*) AS n FROM titulares WHERE id = 'viejo'").first('n'), 0)
     assert.equal(await db.prepare('SELECT COUNT(*) AS n FROM ejecuciones').first('n'), 1)

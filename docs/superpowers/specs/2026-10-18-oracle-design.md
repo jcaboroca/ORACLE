@@ -584,15 +584,20 @@ CREATE TABLE ejecuciones (
 
 CREATE TABLE intentos_pin (
   ip TEXT PRIMARY KEY,
-  fallos INTEGER NOT NULL,
-  bloqueado_hasta INTEGER
+  fallos INTEGER NOT NULL,                -- PIN comparados y no acertados (solo estos bloquean)
+  bloqueado_hasta INTEGER,
+  en_vuelo INTEGER NOT NULL DEFAULT 0,    -- migración 0004: reservas aún sin comparar
+  vuelo_hasta INTEGER,                    -- caducidad de esas reservas (30 s)
+  token TEXT                              -- reserva de la última petición
 );
 
 CREATE TABLE pin_global (                 -- migración 0003: tope de fallos entre todas las IPs
   id INTEGER PRIMARY KEY CHECK (id = 1),
   desde INTEGER NOT NULL,                 -- inicio de la ventana de 15 min
-  fallos INTEGER NOT NULL,
-  bloqueado_hasta INTEGER
+  fallos INTEGER NOT NULL,                -- fallos confirmados en la ventana
+  bloqueado_hasta INTEGER,
+  en_vuelo INTEGER NOT NULL DEFAULT 0,    -- migración 0004
+  vuelo_hasta INTEGER
 );
 ```
 
@@ -623,8 +628,15 @@ Todas las rutas exigen `Authorization: Bearer <PIN>`, comparado en tiempo consta
 el secret `ORACLE_PIN`. 5 fallos por IP → bloqueo de 15 min; más de 50 fallos entre todas
 las IPs en una ventana de 15 min → nadie puede comprobar el PIN durante 15 min (un PIN de 4 cifras
 resiste así la rotación de IPs). El intento se reserva en D1 de forma atómica **antes** de comparar,
-así una ráfaga en paralelo no prueba más PIN de los permitidos; los aciertos liberan su hueco global
-y una IP ya bloqueada no consume el tope global. CORS solo para
+así una ráfaga en paralelo no prueba más PIN de los permitidos. Los intentos **en vuelo** (reservados,
+aún sin comparar) se cuentan aparte de los **fallos confirmados** (migración 0004): solo los fallos
+bloquean. Si `fallos + en_vuelo` llega al tope (5 por IP o 50 en total) sin que haya fallos suficientes,
+la respuesta es 429 `{ error: 'ocupado', reintentar_en: 2 }` (segundos; reintento corto, no el bloqueo);
+así varias peticiones a la vez con el PIN correcto (la PWA al abrirse) nunca reciben un bloqueo falso.
+Tras comparar: acierto → fallos a 0 y se libera la reserva (la IP y el hueco global); fallo → fallos + 1
+y se libera la reserva; el 5.º fallo de la IP o el 50.º global fija el bloqueo de 15 min. Una reserva
+que no se libera (invocación caída a mitad) caduca a los 30 s. Una IP ya bloqueada no reserva ni
+consume el tope global. CORS solo para
 `https://jcaboroca.github.io` y `http://localhost:*`.
 
 | Método | Ruta | Devuelve |
