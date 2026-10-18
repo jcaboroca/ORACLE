@@ -19,3 +19,16 @@ Node ≥ 22. Sin dependencias.
 ```bash
 npm test
 ```
+
+## Backtest
+
+```bash
+npm run backtest                                   # últimos 2 años, 5 monedas
+npm run backtest -- --desde 2025-01-01 --monedas BTC,ETH --capital 5000
+```
+
+Descarga histórico real de Binance (pares USDT para indicadores, EUR para ejecución) y de
+Fear & Greed, lo cachea en `scripts/.cache/` y escribe `data/backtest-v1.json`.
+
+El backtest evalúa la variante **técnico + Fear & Greed**: no hay histórico gratuito fiable de
+titulares ni de derivados, así que esos componentes no participan (sus pesos se renormalizan).
