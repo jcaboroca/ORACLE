@@ -56,6 +56,8 @@ ORACLE/                       PWA en jcaboroca.github.io/ORACLE
 │  ├─ indicadores.js          EMA, SMA, RSI (Wilder), MACD, Bollinger, ATR
 │  ├─ velas.js                normalización, filtrado de velas cerradas, frescura
 │  ├─ estrategia-v1.js        parámetros y puntuación → señal
+│  ├─ estrategia-v2.js        v1 + filtro de régimen y decisión diaria (§6.6)
+│  ├─ estrategias.js          registro de versiones y ESTRATEGIA_ACTIVA
 │  ├─ bot.js                  transición de estado de la cartera (puro: estado + velas + señal → acciones)
 │  ├─ metricas.js             rentabilidad, drawdown, ganadoras/perdedoras, HODL…
 │  ├─ hora.js                 paso horario compartido (Worker y backtest)
@@ -70,9 +72,9 @@ ORACLE/                       PWA en jcaboroca.github.io/ORACLE
 │     ├─ fuentes/             binance.js, derivados.js, fng.js, rss.js, reddit.js, llm.js
 │     └─ repositorio.js       todas las consultas D1
 ├─ scripts/
-│  ├─ backtest.mjs            npm run backtest → data/backtest-v1.json
+│  ├─ backtest.mjs            npm run backtest [-- --estrategia vN] → data/backtest-vN.json
 │  └─ servir.mjs              servidor estático local
-├─ data/backtest-v1.json
+├─ data/backtest-v1.json, data/backtest-v2.json
 └─ test/
 ```
 
@@ -116,7 +118,8 @@ invocación):
 
 ### Cron `3 * * * *` — mercado y bot
 1. Descarga velas USDT (1h/4h/1d), velas EUR 1h, derivados y Fear & Greed.
-2. Para cada moneda, `core/estrategia-v1` calcula la señal (§6) con titulares de las
+2. Para cada moneda, la estrategia de la simulación activa (`estrategia(simulacion.estrategia_version)`
+   de `core/estrategias.js`; hoy `v1`) calcula la señal (§6) con titulares de las
    últimas 24 h leídos de D1.
 3. Una llamada al LLM redacta la explicación de cada señal a partir del desglose
    estructurado. Si falla, plantilla de texto.
@@ -134,6 +137,14 @@ a 1 vez cada 5 minutos.
 
 Todos los umbrales y pesos viven en `core/estrategia-v1.js` como constantes exportadas,
 junto a `VERSION = 'v1'`. Cualquier cambio de parámetros crea una versión nueva.
+
+**Estrategias enchufables.** Cada versión es un módulo `core/estrategia-vN.js` que exporta
+`VERSION`, `PARAMETROS` (señal), `PARAMETROS_BOT` (§7.1, con claves opcionales nuevas que
+`core/bot.js` entiende) y `calcularSenal`. `core/estrategias.js` las registra
+(`ESTRATEGIAS`, `estrategia(version)` que lanza `RangeError` si no existe) y fija
+`ESTRATEGIA_ACTIVA` (la de las simulaciones nuevas y del backtest por defecto). Cada
+simulación guarda su `estrategia_version` y siempre se ejecuta con esa versión. Hoy:
+`ESTRATEGIA_ACTIVA = 'v1'` (ver §6.6).
 
 Siempre se usan **solo velas cerradas**. Una vela 4H/1D cuenta solo si su cierre es
 anterior al momento de decisión.
@@ -207,6 +218,90 @@ Solo en extremos, a la contra: valor < 20 → +0,5; > 80 → −0,5; resto 0.
 - La señal guarda el desglose completo: componentes, subpuntuaciones, indicadores por
   timeframe, IDs de titulares usados y componentes ausentes.
 
+### 6.6 Estrategia v2
+
+Motivo: el backtest de v1 (2024-10-18 → 2026-10-18) dio −18,5 % frente a +20,3 % de comprar
+y mantener, con 718 operaciones (6,9/semana), ~2.000 € de costes sobre 10.000 € y los 359
+cierres por stop-loss/take-profit (ninguno por VENDER). v2 se eligió **con datos y un
+protocolo declarado antes de mirar el periodo de prueba**, no a ojo.
+
+**Reglas (`core/estrategia-v2.js`, `VERSION = 'v2'`):**
+
+- Señal: la de v1 sin cambios (mismos indicadores, pesos, umbrales ±0,35 e índice de
+  confianza, §6.1-6.5).
+- **Filtro de régimen**: un `COMPRAR` solo se mantiene si el cierre de la última vela 1D
+  (USDT) está **por encima de su EMA200 1D**; si no, pasa a `MANTENER` con motivo
+  `filtro_regimen`. `VENDER`, `MANTENER` y `SIN_DATOS` no se filtran. El desglose añade
+  `detalle.regimen = { sobreEma200 }` (`null` sin datos).
+- **Cadencia diaria**: `PARAMETROS_BOT.cadenciaHoras = 24`. El bot solo decide (abrir o
+  cerrar por señal) sobre la vela 1H que cierra a las 00:00 UTC (cierre de la vela 1D), es
+  decir, en la ejecución de las 00:03 UTC. El resto de horas la decisión es `ninguna` con
+  motivo `fuera_de_ventana`; los stops se siguen revisando **cada hora** con las velas 1H
+  EUR (§7.4).
+- Bot: el resto como v1 (§7.1): SL 1,5·ATR%(4H), TP 2,5·ATR%(4H) fijados al abrir y nunca
+  recalculados (sin trailing), confianza mínima 0,60, 20 % por posición, enfriamiento 4 h,
+  comisión 0,1 % y deslizamiento 0,05 %.
+
+`cadenciaHoras` es un parámetro genérico y opcional de `core/bot.js` (por defecto 1 = cada
+hora, comportamiento de v1): solo se decide sobre velas que cierran en una hora UTC múltiplo
+de la cadencia (debe dividir a 24). Orden de comprobación: `sin_datos` →
+`datos_desactualizados` → `fuera_de_ventana` → resto (§7.2).
+
+**Protocolo walk-forward (declarado antes de ejecutar la rejilla):**
+
+- TRAIN 2022-10-18 → 2024-10-18 y TEST 2024-10-18 → 2026-10-18 (00:00 UTC), 5 monedas,
+  10.000 €, mismos costes, variante técnico + Fear & Greed (como v1, §8).
+- Rejilla pequeña de 3 × 2 × 3 × 2 = **36 configuraciones**: cadencia de decisión
+  {1 h, 4 h, 1 d}; régimen {ninguno, cierre 1D > EMA200 1D}; riesgo {A: SL 1,5·ATR4H y
+  TP 2,5·ATR4H (v1); B: SL 2,5·ATR1D y TP 4·ATR1D; C: SL 2,5·ATR1D sin TP}; salida
+  {VENDER si S ≤ −0,35 (v1); VENDER si la tendencia 1D es bajista}. Fijos: umbral de compra
+  0,35, confianza mínima 0,60, 20 %, enfriamiento 4 h.
+- Criterio de selección (solo TRAIN): máxima rentabilidad neta con drawdown máximo ≤ 0,6 ×
+  el de comprar y mantener en TRAIN (0,6 × 42,65 % = 25,59 %); empate → menos operaciones.
+  La elegida se evalúa **una sola vez** en TEST.
+- Decisión binaria: `ESTRATEGIA_ACTIVA = 'v2'` solo si v2 supera a v1 en rentabilidad neta
+  en TEST.
+
+**Resultado.** Solo 12 de las 36 configuraciones cumplían la restricción de drawdown (todas
+con el riesgo A). La mejor fue *decisión diaria + régimen EMA200 + riesgo A* (empatada
+exactamente con su gemela de salida por tendencia 1D: con el TP ajustado ninguna posición
+llega a cerrarse por señal, así que la regla de salida no influye; se conserva la de v1).
+
+| Periodo | Estrategia | Rentabilidad neta | Drawdown máx. | Operaciones (por semana) |
+|---|---|---|---|---|
+| TRAIN | v1 | −13,23 % | 25,52 % | 760 (7,3) |
+| TRAIN | **v2** | **+9,61 %** | **14,86 %** | 474 (4,5) |
+| TRAIN | Comprar y mantener | +145,05 % | 42,65 % | — |
+| TEST | v1 | −18,24 % | 35,49 % | 716 (6,9) |
+| TEST | **v2** | **−22,84 %** | **39,43 %** | 458 (4,4) |
+| TEST | Comprar y mantener | +23,26 % | 64,49 % | — |
+
+Robustez (no usada para elegir): las 5 mejores de TRAIN según el criterio dieron en TEST
+−22,84 % (las cuatro de cadencia diaria) y −26,50 % (cadencia 4 h).
+
+**Decisión: `ESTRATEGIA_ACTIVA` sigue siendo `'v1'`**, porque v2 no superó a v1 en TEST
+(−22,84 % < −18,24 %). v2 queda registrada y disponible (`npm run backtest -- --estrategia
+v2`) pero las simulaciones nuevas usan v1.
+
+**Limitaciones (honestas):**
+
+- Ninguna de las dos estrategias bate a comprar y mantener en ningún periodo, y un backtest
+  **no es garantía de resultados futuros**.
+- Riesgo de sobreajuste: el resultado positivo de v2 en TRAIN depende sobre todo de SOL
+  (+1.888 € realizados; las otras cuatro monedas suman −942 €) y no se repitió en TEST.
+  Que el filtro de régimen apenas actúe (en TEST no cambia ninguna operación: un S ≥ 0,35
+  ya implica casi siempre cierre 1D sobre la EMA200) indica que la mejora en TRAIN vino de
+  la cadencia, no de una ventaja robusta.
+- En TEST, configuraciones con stops más amplios (riesgo B/C) habrían rendido mucho mejor
+  (hasta +52 %), pero en TRAIN violaban la restricción de drawdown (36-41 %). Elegirlas
+  ahora sería usar el periodo de prueba para seleccionar (fuga de información): cualquier
+  v3 que las explore necesita un protocolo nuevo y datos fuera de muestra nuevos (p. ej.
+  el propio paper trading en vivo).
+- El backtest solo usa técnico + Fear & Greed: no hay histórico de noticias ni de derivados,
+  que en vivo sí participan y pueden cambiar las señales.
+- Los costes simulados (0,1 % + 0,05 % por lado) son aproximados; con huecos de precio el
+  stop puede ejecutarse peor que en la simulación.
+
 ## 7. Bot de paper trading
 
 ### 7.1 Parámetros v1
@@ -237,8 +332,13 @@ Solo en extremos, a la contra: valor < 20 → +0,5; > 80 → −0,5; resto 0.
 | Datos desactualizados | Nada (`datos_desactualizados`) | Nada; los stops sí se siguen comprobando con las velas que lleguen |
 
 Vocabulario de `decisiones.motivo`: `abierta`, `cerrada`, `mantener` (o el motivo de la
-señal), `sin_posicion`, `ya_en_posicion`, `confianza_baja`, `saldo_insuficiente`,
-`datos_desactualizados`, `sin_datos`, `enfriamiento`, `cerrada_por_stop`.
+señal: `contradiccion_tecnico_derivados`, `filtro_regimen` en v2), `sin_posicion`,
+`ya_en_posicion`, `confianza_baja`, `saldo_insuficiente`, `datos_desactualizados`,
+`sin_datos`, `enfriamiento`, `cerrada_por_stop`, `fuera_de_ventana` (hora fuera de la
+cadencia de decisión, solo con `cadenciaHoras > 1`, §6.6).
+
+Todos los parámetros del bot salen de `PARAMETROS_BOT` de la estrategia de la simulación;
+la tabla de §7.1 son los de v1.
 
 ### 7.3 Precios
 
@@ -301,15 +401,18 @@ a partir de las filas de D1.
   defecto los últimos 2 años.
 - Descarga el histórico 1H/4H/1D USDT y 1H EUR de Binance (paginado), y el histórico de
   Fear & Greed. Cachea en `scripts/.cache/` (ignorado por git).
-- Recorre hora a hora llamando a **la misma** `ejecutarHora` de `core/hora.js` (que usa
-  `core/estrategia-v1` y `core/bot`) que el Worker, con ventanas de 500 velas (igual que
-  en vivo).
+- `--estrategia vN` elige la estrategia (por defecto `ESTRATEGIA_ACTIVA`); `--hasta`,
+  `--capital` como antes.
+- Recorre hora a hora llamando a **la misma** `ejecutarHora` de `core/hora.js` (que recibe
+  el módulo de estrategia y usa su `calcularSenal` y sus `PARAMETROS_BOT` con `core/bot`)
+  que el Worker, con ventanas de 500 velas (igual que en vivo).
 - **Sin información futura**: en la hora t solo se ven velas cuyo cierre es ≤ t.
 - **Limitación declarada**: no hay histórico gratuito de titulares, y el de long/short y
   open interest es de ~30 días. El backtest evalúa la variante **técnico + Fear & Greed**
   (pesos renormalizados) y lo etiqueta así en el JSON y en la interfaz.
-- Salida: `data/backtest-v1.json` con parámetros, versión, periodo, métricas globales y por
-  moneda, curva de capital (submuestreada a diaria) y operaciones.
+- Salida: `data/backtest-vN.json` con parámetros (`estrategia`, `bot`, `ventana`), versión,
+  periodo, métricas globales y por moneda, recuento de decisiones, curva de capital
+  (submuestreada a diaria) y operaciones.
 
 ## 9. Presupuesto de recursos de Cloudflare (cuenta compartida)
 
@@ -389,10 +492,11 @@ CREATE TABLE decisiones (
   indice_confianza REAL,
   puntuacion REAL,
   accion TEXT NOT NULL,                   -- abrir | cerrar | ninguna
-  motivo TEXT NOT NULL,                   -- abierta | cerrada | mantener (o el motivo de la señal) |
+  motivo TEXT NOT NULL,                   -- abierta | cerrada | mantener (o el motivo de la señal:
+                                          -- contradiccion_tecnico_derivados | filtro_regimen) |
                                           -- sin_posicion | ya_en_posicion | confianza_baja |
                                           -- saldo_insuficiente | datos_desactualizados | sin_datos |
-                                          -- enfriamiento | cerrada_por_stop
+                                          -- enfriamiento | cerrada_por_stop | fuera_de_ventana
   precio REAL,
   desglose_json TEXT NOT NULL,
   estrategia_version TEXT NOT NULL,
@@ -457,7 +561,8 @@ sin pérdida: `Estado.saldo` = `simulaciones.saldo`; `Estado.posiciones` = filas
 de `posiciones` (`velaEntrada` = `vela_entrada`, `precioEntrada` = `precio_entrada`,
 `unidades`, `coste`, `stopLoss` = `stop_loss`, `takeProfit` = `take_profit`);
 `Estado.ultimaRevisada[simbolo]` = `progreso.ultima_vela_revisada`;
-`Estado.enfriamientoHasta[simbolo]` = MAX(`vela_salida`) + 4 h de las posiciones cerradas
+`Estado.enfriamientoHasta[simbolo]` = MAX(`vela_salida`) + `enfriamientoHoras` (de los
+`PARAMETROS_BOT` de la estrategia de la simulación; 4 h en v1 y v2) de las posiciones cerradas
 con `motivo_salida = 'stop_loss'`. Las métricas se calculan desde `operaciones` (con
 `pnl_neto` en las ventas). El Worker (plan 2) debe usar `ejecutarHora` de `core/hora.js`
 para que sus decisiones sean idénticas a las del backtest.
@@ -500,8 +605,8 @@ service worker que cachea solo la estructura de la app (los datos siempre en red
   mantener; curva de capital (bot frente a comprar y mantener); métricas de §7.7 (por moneda
   también); posiciones abiertas con SL/TP fijos; operaciones; decisiones con filtro
   (incluye HOLD y no ejecutadas); selector de simulación y versión; reinicio con confirmación.
-- **Backtest**: mismas métricas sobre `data/backtest-v1.json`, con la etiqueta
-  "técnico + Fear & Greed" y el periodo.
+- **Backtest**: mismas métricas sobre `data/backtest-vN.json` (una por estrategia), con la
+  etiqueta "técnico + Fear & Greed", la versión y el periodo.
 - **Pie fijo**: "Simulación. No es asesoramiento financiero ni garantía de beneficio".
 
 ## 13. Errores
@@ -526,7 +631,11 @@ service worker que cachea solo la estructura de la app (los datos siempre en red
 - **Velas**: filtrado de la vela abierta; 4H/1D no cerrada no se usa; frescura.
 - **Bot**: tamaño 20 % y orden mínima; nunca saldo negativo; no vende sin posición; SL y TP
   en la misma vela → SL; hueco bajo SL → sale a open; velas perdidas recuperadas;
-  enfriamiento; SL/TP no cambian tras abrir; comisiones y deslizamiento exactos.
+  enfriamiento; SL/TP no cambian tras abrir; comisiones y deslizamiento exactos; parámetros
+  inyectables; cadencia de decisión (`fuera_de_ventana`, stops cada hora).
+- **Estrategias**: registro (`estrategia(version)`, `RangeError`); v1 usa los parámetros de bot
+  por defecto; v2 = señal de v1 + `filtro_regimen` y cadencia 24 h; invariante: con v1 el
+  backtest reproduce `data/backtest-v1.json` desde `scripts/.cache`.
 - **Idempotencia**: ejecutar dos veces el cron de mercado sobre la misma vela no crea
   decisiones ni operaciones nuevas (D1 local con Miniflare/`wrangler`).
 - **API**: PIN correcto/incorrecto, bloqueo, CORS, `analizar` no opera y respeta 429.
