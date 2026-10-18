@@ -62,3 +62,22 @@ describe('calcularMetricas', () => {
     assert.equal(p.ETH.perdedoras, 1)
   })
 })
+
+describe('ventas sin pnlNeto', () => {
+  const base = { capitalInicial: 1_000, saldo: 1_000, abiertas: [], curva: [] }
+  test('una venta sin pnlNeto finito lanza en vez de producir NaN', () => {
+    assert.throws(
+      () => calcularMetricas({ ...base, operaciones: [{ tipo: 'venta', simbolo: 'BTC', comision: 1, deslizamiento: 0 }] }),
+      { name: 'TypeError', message: 'venta sin pnlNeto finito: BTC' },
+    )
+    assert.throws(
+      () => metricasPorMoneda([{ tipo: 'venta', simbolo: 'ETH', comision: 1, deslizamiento: 0, pnlNeto: NaN }]),
+      { name: 'TypeError', message: 'venta sin pnlNeto finito: ETH' },
+    )
+  })
+  test('una venta con pnlNeto 0 cuenta como perdedora', () => {
+    const m = calcularMetricas({ ...base, operaciones: [{ tipo: 'venta', simbolo: 'BTC', comision: 1, deslizamiento: 0, pnlNeto: 0 }] })
+    assert.equal(m.ganadoras, 0)
+    assert.equal(m.perdedoras, 1)
+  })
+})

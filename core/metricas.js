@@ -20,6 +20,7 @@ export function drawdownMaximo(valores) {
 /**
  * @typedef {{ tipo: 'compra'|'venta', simbolo: string, comision: number,
  *   deslizamiento: number, pnlNeto?: number }} OperacionMetrica
+ * pnlNeto: obligatorio y finito en las ventas (importe − comisión − coste de la posición).
  */
 
 /**
@@ -27,7 +28,10 @@ export function drawdownMaximo(valores) {
  */
 function resumenOperaciones(operaciones) {
   const ventas = operaciones.filter((o) => o.tipo === 'venta')
-  const pnl = ventas.map((o) => /** @type {number} */ (o.pnlNeto))
+  const pnl = ventas.map((o) => {
+    if (!Number.isFinite(o.pnlNeto)) throw new TypeError('venta sin pnlNeto finito: ' + o.simbolo)
+    return /** @type {number} */ (o.pnlNeto)
+  })
   const beneficioRealizado = pnl.reduce((s, x) => s + x, 0)
   return {
     operaciones: operaciones.length,
