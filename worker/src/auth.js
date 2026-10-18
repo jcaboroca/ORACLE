@@ -1,9 +1,12 @@
 // @ts-check
-// PIN único (Authorization: Bearer <PIN>) comparado en tiempo constante, con bloqueo por IP,
+// PIN único (Authorization: Bearer <PIN>) comparado en tiempo constante, con bloqueo por IP y tope global,
 // y CORS solo para los orígenes de la var ORIGENES. El origen no es la seguridad: lo es el PIN.
 
 export const MAX_FALLOS = 5
 export const BLOQUEO_MS = 15 * 60_000
+/** Tope de PIN fallidos entre todas las IPs por ventana: un PIN de 4 cifras aguanta así la rotación de IPs. */
+export const MAX_FALLOS_GLOBAL = 50
+export const VENTANA_GLOBAL_MS = 15 * 60_000
 
 /**
  * Compara los SHA-256 de ambos textos con XOR acumulado: mismo tiempo sea cual sea la diferencia
@@ -38,9 +41,22 @@ const bloqueado = (hasta) => ({
   ok: false, estado: 429, cuerpo: { error: 'bloqueado', detalle: 'Demasiados intentos con PIN incorrecto. Espera y vuelve a probar.', hasta },
 })
 
+/** @param {number} hasta @returns {ResultadoPin} */
+const bloqueadoGlobal = (hasta) => ({
+  ok: false,
+  estado: 429,
+  cuerpo: { error: 'bloqueado', detalle: 'Demasiados intentos con PIN incorrecto en total. Espera y vuelve a probar.', hasta },
+})
+
 /**
- * Sin bloqueo: compara el PIN. Acierto → borra los fallos de la IP. Fallo → +1; al 5.º, bloqueo de 15 min.
- * Con bloqueo vigente ni siquiera compara. Como mucho 2 llamadas a D1.
+ * Comprueba el PIN reservando el intento ANTES de comparar, en un lote atómico (spec §11):
+ * 1. Intento de la IP: +1 (o vuelve a 1 si su bloqueo caducó); al 5.º, bloqueo de 15 min. No cuenta si
+ *    hay bloqueo global vigente.
+ * 2. Intento global (ventana fija de 15 min): +1 solo si la IP aún puede comparar; el que pasaría de 50
+ *    bloquea la comprobación para todos 15 min.
+ * Solo se compara si la reserva lo permite, así una ráfaga en paralelo no prueba más de 5 PIN por IP ni más
+ * de 50 en total. Acierto → borra la fila de la IP y devuelve su hueco global (los aciertos no cuentan).
+ * Como mucho 2 llamadas a D1.
  * @param {import('./repositorio.js').D1} db
  * @param {Request} peticion
  * @param {string|undefined} pinEsperado secret ORACLE_PIN
@@ -50,20 +66,48 @@ const bloqueado = (hasta) => ({
 export async function verificarPin(db, peticion, pinEsperado, ahora) {
   if (!pinEsperado) return { ok: false, estado: 500, cuerpo: { error: 'configuracion', detalle: 'ORACLE_PIN no está configurado.' } }
   const ip = ipDe(peticion)
-  const fila = await db.prepare('SELECT fallos, bloqueado_hasta FROM intentos_pin WHERE ip = ?').bind(ip).first()
-  if (fila?.bloqueado_hasta && fila.bloqueado_hasta > ahora) return bloqueado(fila.bloqueado_hasta)
+  const hastaIp = ahora + BLOQUEO_MS
+  const inicioVentana = ahora - VENTANA_GLOBAL_MS
+  const [reservaIp, , estadoGlobal] = await db.batch([
+    db.prepare(
+      `INSERT INTO intentos_pin (ip, fallos, bloqueado_hasta)
+       SELECT ?, 1, NULL WHERE NOT EXISTS (SELECT 1 FROM pin_global WHERE id = 1 AND bloqueado_hasta > ?)
+       ON CONFLICT (ip) DO UPDATE SET
+         fallos = CASE WHEN bloqueado_hasta > ? THEN MAX(fallos, ?) + 1
+                       WHEN bloqueado_hasta IS NOT NULL THEN 1
+                       ELSE fallos + 1 END,
+         bloqueado_hasta = CASE WHEN bloqueado_hasta > ? THEN bloqueado_hasta
+                                WHEN bloqueado_hasta IS NULL AND fallos + 1 >= ? THEN ?
+                                ELSE NULL END
+       RETURNING fallos, bloqueado_hasta`,
+    ).bind(ip, ahora, ahora, MAX_FALLOS, ahora, MAX_FALLOS, hastaIp),
+    db.prepare(
+      `INSERT INTO pin_global (id, desde, fallos, bloqueado_hasta)
+       SELECT 1, ?, 1, NULL WHERE (SELECT fallos FROM intentos_pin WHERE ip = ?) <= ?
+       ON CONFLICT (id) DO UPDATE SET
+         desde = CASE WHEN bloqueado_hasta > ? THEN desde WHEN desde <= ? THEN ? ELSE desde END,
+         fallos = CASE WHEN bloqueado_hasta > ? THEN fallos WHEN desde <= ? THEN 1 ELSE fallos + 1 END,
+         bloqueado_hasta = CASE WHEN bloqueado_hasta > ? THEN bloqueado_hasta
+                                WHEN desde > ? AND fallos + 1 > ? THEN ?
+                                ELSE NULL END`,
+    ).bind(
+      ahora, ip, MAX_FALLOS, ahora, inicioVentana, ahora, ahora, inicioVentana, ahora, inicioVentana, MAX_FALLOS_GLOBAL, ahora + BLOQUEO_MS,
+    ),
+    db.prepare('SELECT desde, bloqueado_hasta FROM pin_global WHERE id = 1'),
+  ])
+  const global = estadoGlobal.results[0]
+  if (global?.bloqueado_hasta > ahora) return bloqueadoGlobal(global.bloqueado_hasta)
+  const fila = reservaIp.results[0]
+  if (!fila || fila.fallos > MAX_FALLOS) return bloqueado(fila?.bloqueado_hasta ?? hastaIp)
   if (await compararSeguro(pinDe(peticion), pinEsperado)) {
-    if (fila) await db.prepare('DELETE FROM intentos_pin WHERE ip = ?').bind(ip).run()
+    await db.batch([
+      db.prepare('DELETE FROM intentos_pin WHERE ip = ?').bind(ip),
+      db.prepare('UPDATE pin_global SET fallos = fallos - 1 WHERE id = 1 AND desde = ? AND fallos > 0').bind(global.desde),
+    ])
     return { ok: true }
   }
-  const fallos = (fila?.fallos ?? 0) + 1
-  const hasta = fallos >= MAX_FALLOS ? ahora + BLOQUEO_MS : null
-  await db.prepare(
-    `INSERT INTO intentos_pin (ip, fallos, bloqueado_hasta) VALUES (?, ?, ?)
-     ON CONFLICT (ip) DO UPDATE SET fallos = excluded.fallos, bloqueado_hasta = excluded.bloqueado_hasta`,
-  ).bind(ip, hasta === null ? fallos : 0, hasta).run()
-  if (hasta !== null) return bloqueado(hasta)
-  return { ok: false, estado: 401, cuerpo: { error: 'pin_incorrecto', detalle: `PIN incorrecto. Quedan ${MAX_FALLOS - fallos} intentos.` } }
+  if (fila.fallos >= MAX_FALLOS) return bloqueado(fila.bloqueado_hasta)
+  return { ok: false, estado: 401, cuerpo: { error: 'pin_incorrecto', detalle: `PIN incorrecto. Quedan ${MAX_FALLOS - fila.fallos} intentos.` } }
 }
 
 /** "https://a.io, http://localhost:8080" → lista. @param {string|undefined} texto */

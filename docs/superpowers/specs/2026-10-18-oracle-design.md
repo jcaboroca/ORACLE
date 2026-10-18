@@ -422,7 +422,7 @@ a partir de las filas de D1.
 | Cron triggers: 5/cuenta (1 usado por SolarMonitor) | 2 | queda en 3/5 |
 | Peticiones: 100.000/día por cuenta | 48 crons + ~300 PWA | < 0,5 % |
 | KV escrituras: 1.000/día por cuenta (usado por 4 proyectos) | **0**: ORACLE no usa KV | 0 % |
-| D1 escrituras: 100.000/día | ~5 decisiones + ~5 progreso + 1 capital + ~50 titulares/h ≈ 1.700/día | ~1,7 % |
+| D1 escrituras: 100.000/día | ~5 decisiones + ~5 progreso + 1 capital + ~50 titulares/h ≈ 1.700/día; + ~4 filas por petición con PIN (reserva y liberación del intento) ≈ 1.200/día con ~300 peticiones | ~3 % |
 | D1 lecturas: 5 M/día | consultas indexadas y acotadas: ninguna ruta recorre una tabla entera ni ordena aparte (comprobado con `EXPLAIN QUERY PLAN` en los tests); `GET /api/bot` lee ~720 puntos horarios + ~2 filas por día de historia, no la curva ni las decisiones completas | < 1 % |
 | Subpeticiones: 50/invocación | noticias ≈ 19; mercado = 15 velas USDT + 5 EUR + 15 derivados (3 por moneda) + 1 F&G + hasta 2 LLM (Groq, Gemini) = 38 | bajo límite |
 | CPU: 10 ms/invocación | parsing ligero (regex para RSS, sin librerías XML); mercado: ~1,3 MB de JSON de velas (15 × 501 USDT + 5 × 48 EUR) validado y convertido en una sola pasada, funding por moneda en vez de los ~200 KB de todo el exchange; `[observability]` activo para ver la CPU real por invocación en Workers Logs | por invocación: si se excede, solo falla esa ejecución de ORACLE |
@@ -558,6 +558,13 @@ CREATE TABLE intentos_pin (
   fallos INTEGER NOT NULL,
   bloqueado_hasta INTEGER
 );
+
+CREATE TABLE pin_global (                 -- migración 0003: tope de fallos entre todas las IPs
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  desde INTEGER NOT NULL,                 -- inicio de la ventana de 15 min
+  fallos INTEGER NOT NULL,
+  bloqueado_hasta INTEGER
+);
 ```
 
 **Reconstrucción del estado del bot.** El `Estado` de `core/bot.js` se reconstruye desde D1
@@ -584,7 +591,11 @@ días y diaria antes) con una búsqueda por día; con más de 2.000 puntos se re
 ## 11. API (Worker)
 
 Todas las rutas exigen `Authorization: Bearer <PIN>`, comparado en tiempo constante con
-el secret `ORACLE_PIN`. 5 fallos por IP → bloqueo de 15 min. CORS solo para
+el secret `ORACLE_PIN`. 5 fallos por IP → bloqueo de 15 min; más de 50 fallos entre todas
+las IPs en una ventana de 15 min → nadie puede comprobar el PIN durante 15 min (un PIN de 4 cifras
+resiste así la rotación de IPs). El intento se reserva en D1 de forma atómica **antes** de comparar,
+así una ráfaga en paralelo no prueba más PIN de los permitidos; los aciertos liberan su hueco global
+y una IP ya bloqueada no consume el tope global. CORS solo para
 `https://jcaboroca.github.io` y `http://localhost:*`.
 
 | Método | Ruta | Devuelve |

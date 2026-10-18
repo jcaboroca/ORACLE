@@ -8,7 +8,7 @@ import { HORA } from '../../core/velas.js'
 import {
   CURVA_MAXIMA, ESPERA_ANALIZAR_MS, TAMANO_PAGINA, atender, limitarCurva, primeraFrase, submuestrearCurva,
 } from '../src/api.js'
-import { BLOQUEO_MS, compararSeguro } from '../src/auth.js'
+import { BLOQUEO_MS, MAX_FALLOS_GLOBAL, VENTANA_GLOBAL_MS, compararSeguro } from '../src/auth.js'
 import { ejecutarMercado } from '../src/ejecuciones/mercado.js'
 import { crearSimulacion, guardarCapital, guardarPuntuaciones, insertarTitulares } from '../src/repositorio.js'
 import { simularFetch } from './ayudantes.js'
@@ -97,6 +97,64 @@ describe('PIN, bloqueo y CORS', () => {
     assert.equal((await pedir(db, '/api/resumen', { ahora: ahora + BLOQUEO_MS - 1 })).estado, 429)
     assert.equal((await pedir(db, '/api/resumen', { ip: '5.6.7.8', ahora })).estado, 200)
     assert.equal((await pedir(db, '/api/resumen', { ahora: ahora + BLOQUEO_MS })).estado, 200)
+  })
+
+  test('ráfaga en paralelo desde una IP: como mucho 5 PIN comparados; el resto, 429 sin comparar (ni el correcto)', async () => {
+    const db = crearD1({ latencia: true })
+    const ahora = ahoraDe(6)
+    // 20 a la vez; la 11.ª lleva el PIN correcto: llega tras 5 reservas y no debe ni compararse.
+    const pines = Array.from({ length: 20 }, (_, i) => (i === 10 ? PIN : `00${i}`))
+    const r = await Promise.all(pines.map((pin) => pedir(db, '/api/simulaciones', { pin, ahora })))
+    assert.deepEqual(r.slice(0, 4).map((x) => x.cuerpo.detalle), [
+      'PIN incorrecto. Quedan 4 intentos.', 'PIN incorrecto. Quedan 3 intentos.', 'PIN incorrecto. Quedan 2 intentos.',
+      'PIN incorrecto. Quedan 1 intentos.',
+    ])
+    assert.equal(r.filter((x) => x.estado === 401).length, 4, '4 fallos con 401 y el 5.º ya bloquea')
+    assert.equal(r[10].estado, 429, 'el PIN correcto llegó con la IP ya agotada')
+    assert.ok(r.slice(4).every((x) => x.estado === 429 && x.cuerpo.hasta === ahora + BLOQUEO_MS))
+    assert.equal((await pedir(db, '/api/simulaciones', { ahora: ahora + 60_000 })).estado, 429)
+    assert.equal((await pedir(db, '/api/simulaciones', { ahora: ahora + BLOQUEO_MS })).estado, 200)
+  })
+
+  test('caducado el bloqueo, la IP vuelve a tener 5 intentos', async () => {
+    const db = crearD1()
+    const ahora = ahoraDe(6)
+    for (let i = 0; i < 5; i++) await pedir(db, '/api/resumen', { pin: 'x', ahora })
+    const despues = await pedir(db, '/api/resumen', { pin: 'x', ahora: ahora + BLOQUEO_MS })
+    assert.equal(despues.estado, 401)
+    assert.equal(despues.cuerpo.detalle, 'PIN incorrecto. Quedan 4 intentos.')
+  })
+
+  test(`tope global: más de ${MAX_FALLOS_GLOBAL} fallos en 15 min entre todas las IPs → 429 para todos durante 15 min`, async () => {
+    const db = crearD1({ latencia: true })
+    const ahora = ahoraDe(6)
+    // Una IP distinta por intento (rotación de IPs contra un PIN de 4 cifras), todos a la vez.
+    const r = await Promise.all(Array.from({ length: 60 }, (_, i) => pedir(db, '/api/simulaciones', { pin: 'x', ip: `10.0.0.${i}`, ahora })))
+    assert.equal(r.filter((x) => x.estado === 401).length, MAX_FALLOS_GLOBAL, `solo ${MAX_FALLOS_GLOBAL} se comparan`)
+    const resto = r.filter((x) => x.estado === 429)
+    assert.equal(resto.length, 60 - MAX_FALLOS_GLOBAL)
+    assert.ok(resto.every((x) => x.cuerpo.error === 'bloqueado' && x.cuerpo.hasta === ahora + BLOQUEO_MS))
+    const dueno = await pedir(db, '/api/simulaciones', { ip: '9.9.9.9', ahora: ahora + 60_000 })
+    assert.equal(dueno.estado, 429, 'ni con el PIN correcto desde otra IP')
+    assert.match(dueno.cuerpo.detalle, /en total/)
+    assert.equal((await pedir(db, '/api/simulaciones', { ip: '9.9.9.9', ahora: ahora + BLOQUEO_MS })).estado, 200)
+  })
+
+  test('el tope global solo cuenta fallos: aciertos y peticiones de una IP ya bloqueada no lo consumen', async () => {
+    const db = crearD1({ latencia: true })
+    const ahora = ahoraDe(6)
+    // 16 rondas de 5 peticiones a la vez (lo que hace la PWA al abrirse): 80 aciertos en la misma ventana.
+    for (let ronda = 0; ronda < 16; ronda++) {
+      const aciertos = await Promise.all(Array.from({ length: 5 }, () => pedir(db, '/api/simulaciones', { ahora })))
+      assert.ok(aciertos.every((x) => x.estado === 200))
+    }
+    // Una sola IP insistiendo: se bloquea ella, no el resto.
+    const ip = await Promise.all(Array.from({ length: 80 }, () => pedir(db, '/api/simulaciones', { pin: 'x', ip: '6.6.6.6', ahora })))
+    assert.equal(ip.filter((x) => x.estado === 401).length, 4)
+    assert.equal((await pedir(db, '/api/simulaciones', { ip: '9.9.9.9', ahora })).estado, 200)
+    const fallosGlobales = await db.prepare('SELECT fallos FROM pin_global').first('fallos')
+    assert.equal(fallosGlobales, 5, 'los 5 PIN comparados de esa IP')
+    assert.equal(VENTANA_GLOBAL_MS, 15 * 60_000)
   })
 
   test('sin el secret ORACLE_PIN nadie entra', async () => {
