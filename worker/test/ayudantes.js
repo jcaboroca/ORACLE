@@ -16,12 +16,15 @@ export const fixtureJson = (nombre) => JSON.parse(fixtureTexto(nombre))
  */
 
 /**
- * fetch simulado: `responder(url, init)` decide la respuesta; `llamadas` guarda cada petición.
+ * fetch simulado: `responder(url, init)` decide la respuesta; `llamadas` guarda cada petición y `respuestas`
+ * cada Response devuelta (para comprobar que su cuerpo se consume o se cancela siempre).
  * @param {(url: string, init: RequestInit|undefined) => RespuestaSimulada} responder
  */
 export function simularFetch(responder) {
   /** @type {{ url: string, init: RequestInit|undefined }[]} */
   const llamadas = []
+  /** @type {Response[]} */
+  const respuestas = []
   /** @param {string|URL|Request} entrada @param {RequestInit} [init] */
   const fetch = async (entrada, init) => {
     const url = String(entrada instanceof Request ? entrada.url : entrada)
@@ -29,10 +32,18 @@ export function simularFetch(responder) {
     const r = responder(url, init)
     if (r.error) throw r.error
     const cuerpo = typeof r.cuerpo === 'string' ? r.cuerpo : JSON.stringify(r.cuerpo ?? null)
-    return new Response(cuerpo, { status: r.estado ?? 200 })
+    const respuesta = new Response(cuerpo, { status: r.estado ?? 200 })
+    respuestas.push(respuesta)
+    return respuesta
   }
-  return Object.assign(fetch, { llamadas })
+  return Object.assign(fetch, { llamadas, respuestas })
 }
+
+/**
+ * Todas las respuestas del fetch simulado tienen el cuerpo leído o cancelado (ninguna queda colgada).
+ * @param {{ respuestas: Response[] }} fetch
+ */
+export const cuerposConsumidos = (fetch) => fetch.respuestas.length > 0 && fetch.respuestas.every((r) => r.bodyUsed)
 
 /**
  * Velas → filas de /api/v3/klines (mismo formato que devuelve Binance).

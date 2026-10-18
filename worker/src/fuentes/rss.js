@@ -1,5 +1,6 @@
 // @ts-check
 // Titulares de feeds RSS 2.0 y Atom con expresiones regulares (sin librerías XML: CPU mínima).
+import { pedirTexto } from './http.js'
 
 /** @typedef {{ fuente: string, origen: 'rss'|'reddit', titulo: string, url: string|null, publicadoEn: number }} TitularCrudo */
 
@@ -96,11 +97,9 @@ export function leerFeed(xml, fuente, origen = 'rss') {
  * @returns {Promise<{ titulares: TitularCrudo[], fallos: string[] }>}
  */
 export async function descargarFeeds(fetch) {
-  const resultados = await Promise.allSettled(FEEDS.map(async (f) => {
-    const res = await fetch(f.url, { headers: CABECERAS_FEED })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return leerFeed(await res.text(), f.fuente)
-  }))
+  const resultados = await Promise.allSettled(FEEDS.map(async (f) => (
+    leerFeed(await pedirTexto(fetch, f.url, { headers: CABECERAS_FEED }), f.fuente)
+  )))
   /** @type {TitularCrudo[]} */
   const titulares = []
   /** @type {string[]} */

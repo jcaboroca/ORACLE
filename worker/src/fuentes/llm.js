@@ -3,6 +3,7 @@
 // Cada respuesta se valida de forma estricta; si no vale, se pasa al siguiente. Sin ninguno:
 // léxico local para puntuar titulares y plantilla para explicar señales.
 import { analizarTitular } from '../../../core/lexico.js'
+import { pedirJson } from './http.js'
 
 /** @typedef {'cf'|'groq'|'gemini'} Motor */
 /**
@@ -61,7 +62,7 @@ export function proveedores(env, fetch) {
     lista.push({
       motor: 'groq',
       llamar: async (sistema, usuario) => {
-        const res = await fetch(GROQ, {
+        const json = await pedirJson(fetch, GROQ, {
           method: 'POST',
           headers: { Authorization: `Bearer ${clave}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -73,8 +74,6 @@ export function proveedores(env, fetch) {
           }),
           signal: AbortSignal.timeout(TIEMPO_MAXIMO_MS),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const json = await res.json()
         return json?.choices?.[0]?.message?.content
       },
     })
@@ -85,7 +84,7 @@ export function proveedores(env, fetch) {
     lista.push({
       motor: 'gemini',
       llamar: async (sistema, usuario) => {
-        const res = await fetch(`${GEMINI}/${modelo}:generateContent`, {
+        const json = await pedirJson(fetch, `${GEMINI}/${modelo}:generateContent`, {
           method: 'POST',
           headers: { 'x-goog-api-key': clave, 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -95,8 +94,6 @@ export function proveedores(env, fetch) {
           }),
           signal: AbortSignal.timeout(TIEMPO_MAXIMO_MS),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const json = await res.json()
         return json?.candidates?.[0]?.content?.parts?.[0]?.text
       },
     })

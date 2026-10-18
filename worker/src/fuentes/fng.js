@@ -1,5 +1,6 @@
 // @ts-check
 // Índice Fear & Greed de alternative.me (1 subpetición). Opcional: si falla, el componente queda ausente.
+import { pedirJson } from './http.js'
 
 export const FNG = 'https://api.alternative.me/fng/?limit=1'
 
@@ -23,7 +24,5 @@ export function leerFng(json) {
  * @returns {Promise<Fng>}
  */
 export async function descargarFng(fetch) {
-  const res = await fetch(FNG)
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return leerFng(await res.json())
+  return leerFng(await pedirJson(fetch, FNG))
 }

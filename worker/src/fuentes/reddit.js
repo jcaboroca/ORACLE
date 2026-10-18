@@ -1,6 +1,7 @@
 // @ts-check
 // Rumores de Reddit, best-effort: el feed Atom (.rss) de cada subreddit. El .json responde 403
 // a clientes que no son navegador y Reddit limita mucho las IPs de nube; si falla, se ignora.
+import { pedirTexto } from './http.js'
 import { leerFeed } from './rss.js'
 
 /** @typedef {import('./rss.js').TitularCrudo} TitularCrudo */
@@ -28,11 +29,9 @@ export const leerReddit = (xml, subreddit) => leerFeed(xml, `r/${subreddit}`, 'r
  * @returns {Promise<{ titulares: TitularCrudo[], fallos: string[] }>}
  */
 export async function descargarReddit(fetch) {
-  const resultados = await Promise.allSettled(SUBREDDITS.map(async (s) => {
-    const res = await fetch(urlSubreddit(s), { headers: CABECERAS_REDDIT })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return leerReddit(await res.text(), s)
-  }))
+  const resultados = await Promise.allSettled(SUBREDDITS.map(async (s) => (
+    leerReddit(await pedirTexto(fetch, urlSubreddit(s), { headers: CABECERAS_REDDIT }), s)
+  )))
   /** @type {TitularCrudo[]} */
   const titulares = []
   /** @type {string[]} */
