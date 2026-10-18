@@ -269,6 +269,64 @@ describe('parámetros inyectables', () => {
   })
 })
 
+describe('cadencia de decisión', () => {
+  const D = 1007 * HORA // vela que cierra a las 00:00 UTC: (D + 1 h) es múltiplo de 24 h
+  const AHORA_D = D + HORA + 3 * 60_000
+  const diaria = { ...PARAMETROS_BOT, cadenciaHoras: 24 }
+  test('por defecto se decide cada hora', () => {
+    assert.equal(/** @type {Record<string, unknown>} */ (PARAMETROS_BOT).cadenciaHoras, undefined)
+    assert.ok((T + HORA) % (24 * HORA) !== 0)
+    const r = pasoMoneda(estadoInicial(10_000), { simbolo: 'BTC', velasEur: [vela(T, plana(100))], senal: senal(), ahora: AHORA, valorCartera: 10_000 })
+    assert.equal(r.decision.accion, 'abrir')
+  })
+  test('cada 24 h: fuera del cierre diario no abre (fuera_de_ventana); al cierre sí', () => {
+    const fuera = pasoMoneda(estadoInicial(10_000), {
+      simbolo: 'BTC', velasEur: [vela(D - HORA, plana(100))], senal: senal(), ahora: AHORA_D - HORA, valorCartera: 10_000,
+    }, diaria)
+    assert.equal(fuera.decision.accion, 'ninguna')
+    assert.equal(fuera.decision.motivo, 'fuera_de_ventana')
+    assert.equal(fuera.decision.vela, D - HORA)
+    const dentro = pasoMoneda(fuera.estado, {
+      simbolo: 'BTC', velasEur: [vela(D - HORA, plana(100)), vela(D, plana(100))], senal: senal(), ahora: AHORA_D, valorCartera: 10_000,
+    }, diaria)
+    assert.equal(dentro.decision.accion, 'abrir')
+  })
+  test('cada 4 h: decide en las velas que cierran a 0, 4, 8… UTC', () => {
+    const cada4 = { ...PARAMETROS_BOT, cadenciaHoras: 4 }
+    const motivos = [0, 1, 2, 3, 4].map((k) => pasoMoneda(estadoInicial(10_000), {
+      simbolo: 'BTC', velasEur: [vela(D + k * HORA, plana(100))], senal: senal(), ahora: AHORA_D + k * HORA, valorCartera: 10_000,
+    }, cada4).decision.motivo)
+    assert.deepEqual(motivos, ['abierta', 'fuera_de_ventana', 'fuera_de_ventana', 'fuera_de_ventana', 'abierta'])
+  })
+  test('fuera de la ventana VENDER no cierra, pero los stops sí se ejecutan', () => {
+    const e = pasoMoneda(estadoInicial(10_000), {
+      simbolo: 'BTC', velasEur: [vela(D, plana(100))], senal: senal(), ahora: AHORA_D, valorCartera: 10_000,
+    }, diaria).estado
+    const vender = pasoMoneda(e, {
+      simbolo: 'BTC', velasEur: [vela(D + HORA, plana(101))], senal: senal({ veredicto: 'VENDER' }), ahora: AHORA_D + HORA, valorCartera: 10_000,
+    }, diaria)
+    assert.equal(vender.eventos.length, 0)
+    assert.equal(vender.decision.motivo, 'fuera_de_ventana')
+    const sl = e.posiciones.BTC.stopLoss
+    const stop = pasoMoneda(e, {
+      simbolo: 'BTC', velasEur: [vela(D + HORA, { o: 100, h: 100, l: sl - 1, c: 99 })], senal: senal({ veredicto: 'MANTENER' }), ahora: AHORA_D + HORA, valorCartera: 10_000,
+    }, diaria)
+    assert.equal(stop.eventos.length, 1)
+    assert.equal(stop.eventos[0].motivo, 'stop_loss')
+    assert.equal(stop.decision.motivo, 'fuera_de_ventana')
+  })
+  test('sin datos y datos desactualizados se informan antes que la ventana', () => {
+    const r1 = pasoMoneda(estadoInicial(10_000), {
+      simbolo: 'BTC', velasEur: [vela(D + HORA, plana(100))], senal: senal({ veredicto: 'SIN_DATOS' }), ahora: AHORA_D + HORA, valorCartera: 10_000,
+    }, diaria)
+    assert.equal(r1.decision.motivo, 'sin_datos')
+    const r2 = pasoMoneda(estadoInicial(10_000), {
+      simbolo: 'BTC', velasEur: [vela(D, plana(100))], senal: senal(), ahora: AHORA_D + HORA, valorCartera: 10_000,
+    }, diaria)
+    assert.equal(r2.decision.motivo, 'datos_desactualizados')
+  })
+})
+
 describe('valoración y comprar y mantener', () => {
   test('valorCartera usa precios actuales y, si faltan, el de entrada', () => {
     const e = conPosicion()

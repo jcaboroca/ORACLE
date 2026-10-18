@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { PARAMETROS_BOT } from '../core/bot.js'
 import * as v1 from '../core/estrategia-v1.js'
+import * as v2 from '../core/estrategia-v2.js'
 import { ESTRATEGIAS, ESTRATEGIA_ACTIVA, estrategia } from '../core/estrategias.js'
 
 describe('registro de estrategias', () => {
@@ -28,5 +29,9 @@ describe('registro de estrategias', () => {
   })
   test('la estrategia activa está registrada', () => {
     assert.ok(Object.hasOwn(ESTRATEGIAS, ESTRATEGIA_ACTIVA))
+  })
+  test('v2 está registrada pero la activa sigue siendo v1: v2 no superó a v1 en TEST (spec §6.6)', () => {
+    assert.equal(estrategia('v2'), v2)
+    assert.equal(ESTRATEGIA_ACTIVA, 'v1')
   })
 })

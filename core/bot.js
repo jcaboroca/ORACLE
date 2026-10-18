@@ -31,7 +31,11 @@ import { HORA, cerradasHasta } from './velas.js'
  */
 /**
  * @typedef {{ comision: number, deslizamiento: number, confianzaMinima: number, fraccionPosicion: number,
- *   ordenMinima: number, multStopLoss: number, multTakeProfit: number, enfriamientoHoras: number }} ParametrosBot
+ *   ordenMinima: number, multStopLoss: number, multTakeProfit: number, enfriamientoHoras: number,
+ *   cadenciaHoras?: number }} ParametrosBot
+ * cadenciaHoras (opcional, por defecto 1): solo se decide sobre velas que cierran en una hora UTC
+ * múltiplo de la cadencia (4 → cierres de vela 4H; 24 → cierre diario). Debe dividir a 24.
+ * Fuera de esa ventana la decisión es 'fuera_de_ventana'; los stops se revisan igualmente cada hora.
  */
 
 /** Parámetros por defecto (los de la estrategia v1). Cada estrategia publica los suyos. */
@@ -150,6 +154,7 @@ export function pasoMoneda(estadoPrevio, { simbolo, velasEur: todasEur, senal, a
 
   if (senal.veredicto === 'SIN_DATOS') return { estado, eventos, decision: decidir('ninguna', 'sin_datos') }
   if (!fresca) return { estado, eventos, decision: decidir('ninguna', 'datos_desactualizados') }
+  if ((vela + HORA) % ((p.cadenciaHoras ?? 1) * HORA) !== 0) return { estado, eventos, decision: decidir('ninguna', 'fuera_de_ventana') }
   const posicion = estado.posiciones[simbolo]
 
   if (senal.veredicto === 'VENDER') {
