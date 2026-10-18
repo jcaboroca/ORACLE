@@ -178,3 +178,117 @@ export function guardarCapital(db, { simulacionId, vela, valorCartera, saldo, va
     'INSERT OR IGNORE INTO capital (simulacion_id, vela_1h, valor_cartera, saldo, valor_hodl) VALUES (?, ?, ?, ?, ?)',
   ).bind(simulacionId, vela, valorCartera, saldo, valorHodl).run()
 }
+
+// ── Ejecuciones ──────────────────────────────────────────────────────────────
+
+/**
+ * @typedef {{ id: number, tipo: 'noticias'|'mercado'|'manual', inicio: number, fin: number|null,
+ *   ok: boolean|null, fallos: string[] }} Ejecucion
+ */
+
+/** @param {D1} db @param {'noticias'|'mercado'|'manual'} tipo @param {number} inicio @returns {Promise<number>} */
+export function iniciarEjecucion(db, tipo, inicio) {
+  return db.prepare('INSERT INTO ejecuciones (tipo, inicio) VALUES (?, ?) RETURNING id').bind(tipo, inicio).first('id')
+}
+
+/**
+ * @param {D1} db @param {number} id
+ * @param {{ fin: number, ok: boolean, detalle: { fallos: string[] } & Record<string, unknown> }} cierre
+ */
+export function finalizarEjecucion(db, id, { fin, ok, detalle }) {
+  return db.prepare('UPDATE ejecuciones SET fin = ?, ok = ?, detalle_json = ? WHERE id = ?')
+    .bind(fin, ok ? 1 : 0, JSON.stringify(detalle), id).run()
+}
+
+/** @param {any} fila @returns {Ejecucion} */
+export function filaAEjecucion(fila) {
+  const detalle = fila.detalle_json ? JSON.parse(fila.detalle_json) : {}
+  return {
+    id: fila.id, tipo: fila.tipo, inicio: fila.inicio, fin: fila.fin,
+    ok: fila.ok === null ? null : fila.ok === 1, fallos: Array.isArray(detalle.fallos) ? detalle.fallos : [],
+  }
+}
+
+/**
+ * Ejecución más reciente de alguno de los tipos dados.
+ * @param {D1} db @param {('noticias'|'mercado'|'manual')[]} tipos
+ * @returns {Promise<Ejecucion|null>}
+ */
+export async function ultimaEjecucion(db, tipos) {
+  const fila = await db.prepare(
+    `SELECT * FROM ejecuciones WHERE tipo IN (${tipos.map(() => '?').join(', ')}) ORDER BY inicio DESC, id DESC LIMIT 1`,
+  ).bind(...tipos).first()
+  return fila ? filaAEjecucion(fila) : null
+}
+
+// ── Titulares ────────────────────────────────────────────────────────────────
+
+/** @typedef {import('./fuentes/rss.js').TitularCrudo & { id: string }} TitularNuevo */
+
+/**
+ * Inserta en 1 sentencia (json_each) solo los titulares cuyo id no existe. Devuelve cuántos entraron.
+ * @param {D1} db @param {TitularNuevo[]} titulares
+ */
+export async function insertarTitulares(db, titulares) {
+  if (titulares.length === 0) return 0
+  const r = await db.prepare(
+    `INSERT OR IGNORE INTO titulares (id, fuente, origen, titulo, url, publicado_en)
+     SELECT json_extract(value, '$.id'), json_extract(value, '$.fuente'), json_extract(value, '$.origen'),
+            json_extract(value, '$.titulo'), json_extract(value, '$.url'), json_extract(value, '$.publicadoEn')
+     FROM json_each(?)`,
+  ).bind(JSON.stringify(titulares)).run()
+  return r.meta.changes
+}
+
+/**
+ * Titulares sin puntuar publicados desde `desde`, los más recientes primero.
+ * @param {D1} db @param {number} desde @param {number} limite
+ * @returns {Promise<{ id: string, titulo: string }[]>}
+ */
+export async function titularesSinPuntuar(db, desde, limite) {
+  return (await db.prepare(
+    'SELECT id, titulo FROM titulares WHERE puntuacion IS NULL AND publicado_en >= ? ORDER BY publicado_en DESC LIMIT ?',
+  ).bind(desde, limite).all()).results
+}
+
+/**
+ * Guarda puntuación, monedas y motor de cada titular en 1 sentencia (UPDATE … FROM json_each).
+ * @param {D1} db @param {Record<string, { puntuacion: number, monedas: string[], motor: string }>} resultados
+ */
+export async function guardarPuntuaciones(db, resultados) {
+  const lista = Object.entries(resultados).map(([id, r]) => ({ id, ...r }))
+  if (lista.length === 0) return
+  await db.prepare(
+    `UPDATE titulares SET puntuacion = json_extract(j.value, '$.puntuacion'),
+       monedas_json = json_extract(j.value, '$.monedas'), motor = json_extract(j.value, '$.motor')
+     FROM json_each(?) AS j WHERE titulares.id = json_extract(j.value, '$.id')`,
+  ).bind(JSON.stringify(lista)).run()
+}
+
+/**
+ * Titulares puntuados de (desde, hasta] para la estrategia.
+ * @param {D1} db @param {number} desde @param {number} hasta
+ * @returns {Promise<import('../../core/estrategia-v1.js').Titular[]>}
+ */
+export async function titularesParaEstrategia(db, desde, hasta) {
+  const { results } = await db.prepare(
+    `SELECT id, origen, publicado_en, monedas_json, puntuacion FROM titulares
+     WHERE publicado_en > ? AND publicado_en <= ? AND puntuacion IS NOT NULL ORDER BY publicado_en`,
+  ).bind(desde, hasta).all()
+  return results.map((t) => ({
+    id: t.id, origen: t.origen, publicadoEn: t.publicado_en, monedas: JSON.parse(t.monedas_json ?? '[]'), puntuacion: t.puntuacion,
+  }))
+}
+
+/**
+ * Purga (spec §10): titulares > 7 días, ejecuciones > 30 días y bloqueos de PIN caducados. 1 llamada.
+ * @param {D1} db @param {number} ahora
+ */
+export async function purgar(db, ahora) {
+  const dia = 24 * HORA
+  await db.batch([
+    db.prepare('DELETE FROM titulares WHERE publicado_en < ?').bind(ahora - 7 * dia),
+    db.prepare('DELETE FROM ejecuciones WHERE inicio < ?').bind(ahora - 30 * dia),
+    db.prepare('DELETE FROM intentos_pin WHERE bloqueado_hasta IS NOT NULL AND bloqueado_hasta < ?').bind(ahora),
+  ])
+}
