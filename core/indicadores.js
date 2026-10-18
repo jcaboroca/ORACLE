@@ -133,7 +133,9 @@ export function bollinger(cierres, n = 20, k = 2) {
     superior[i] = m + k * desviacion
     inferior[i] = m - k * desviacion
     const ancho = 2 * k * desviacion
-    pctB[i] = ancho === 0 ? 0.5 : (cierres[i] - (m - k * desviacion)) / ancho
+    // ventana plana: tolera la deriva de coma flotante de la media con precios decimales
+    const plana = desviacion <= 1e-12 * Math.abs(m)
+    pctB[i] = plana ? 0.5 : (cierres[i] - (m - k * desviacion)) / ancho
   }
   return { media, superior, inferior, pctB }
 }

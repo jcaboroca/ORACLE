@@ -77,6 +77,11 @@ describe('bollinger', () => {
   test('ventana plana: %B = 0.5', () => {
     assert.equal(ultimo(bollinger(new Array(25).fill(5)).pctB), 0.5)
   })
+  test('ventana plana con decimales: %B = 0.5', () => {
+    for (const x of [0.1, 2.7, 65000.13, 0.0000213]) {
+      assert.equal(ultimo(bollinger(new Array(25).fill(x)).pctB), 0.5, `precio ${x}`)
+    }
+  })
 })
 
 describe('atr (Wilder)', () => {
