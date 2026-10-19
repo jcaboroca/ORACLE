@@ -10,6 +10,8 @@
   "scripts": {
     "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.js\" \"test/pwa/*.test.js\" \"worker/test/*.test.js\"",
     "backtest": "node scripts/backtest.mjs",
+    "dev": "node scripts/servir.mjs",
+    "api-simulada": "node --disable-warning=ExperimentalWarning scripts/api-simulada.mjs",
     "iconos": "node scripts/iconos.mjs"
   }
 }

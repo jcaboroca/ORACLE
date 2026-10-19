@@ -72,3 +72,33 @@ base de datos y una API JSON protegida por PIN para la PWA. Usa exactamente el m
   despliegue se aplican las migraciones `0001`-`0004` con `npx wrangler@4 d1 migrations apply oracle --remote`.
 
 No existe ninguna ruta que envíe órdenes a un exchange: es una simulación.
+
+## PWA
+
+La interfaz es una PWA estática (HTML, CSS y módulos ES, sin build) en la raíz del repositorio, publicada
+con GitHub Pages en <https://jcaboroca.github.io/ORACLE/>. Se instala en el iPhone desde Safari
+(Compartir → Añadir a pantalla de inicio) y en Android desde el menú del navegador.
+
+- Pantallas: acceso con PIN (se guarda en el dispositivo), Panel (Fear & Greed, una tarjeta por moneda,
+  frescura y «Analizar ahora»), detalle de moneda (velas 1H/4H/1D de Binance pedidas desde el navegador
+  —de OKX si Binance falla, con la fuente indicada— con EMA20/50/200 y RSI, desglose T/D/N/F, titulares e historial), Bot (cartera frente a comprar y
+  mantener, curva, métricas, posiciones, operaciones, decisiones, simulaciones y reinicio) y Backtest
+  (`data/backtest-vN.json`, variante técnico + Fear & Greed).
+- Refresca al abrir y cada 5 minutos solo mientras está visible. El service worker guarda únicamente la
+  estructura de la app; los datos (API, Binance/OKX, backtest) van siempre a la red.
+- `config.js` tiene la URL del Worker (`API_PRODUCCION` = `https://oracle.mundialisimo.workers.dev`); en
+  `localhost` usa `http://localhost:8787`. El Worker solo abre CORS a `https://jcaboroca.github.io` y
+  `http://localhost:8080` (var `ORIGENES`).
+- Cliente de la API: como mucho 2 peticiones a la vez (el Worker reserva un intento de PIN por petición en
+  vuelo), reintento automático ante 429 `ocupado` (hasta 3 veces) y plazo de 20 s (60 s en «Analizar
+  ahora», que tarda 25-35 s). 401 o bloqueo por PIN → vuelta al acceso con el mensaje del Worker.
+- Gráficos con [TradingView Lightweight Charts™](https://www.tradingview.com/) v5.2.1 (Apache-2.0,
+  `vendor/`). Iconos generados desde `icons/icono.svg` con `npm run iconos`.
+
+```bash
+npm run dev            # http://localhost:8080
+npm run api-simulada   # otra terminal: el Worker real con datos sintéticos de los tests en :8787, PIN 4815162342
+```
+
+Para probar contra el Worker de verdad en local, en lugar de la API simulada usa `npx wrangler@4 dev`
+desde `worker/` (ver la checklist del plan 2).
