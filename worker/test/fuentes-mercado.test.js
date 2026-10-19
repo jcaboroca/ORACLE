@@ -212,6 +212,8 @@ describe('okx: cliente con límite de ritmo', () => {
     assert.deepEqual(await c.pedir('/api/v5/public/funding-rate?instId=BTC-USDT-SWAP'), [['1']])
     assert.deepEqual(esperar.esperas, [PAUSA_REINTENTO_MS])
     assert.equal(c.reintentos, 1)
+    assert.equal(c.limitadas.length, 1, 'cada respuesta limitada queda anotada (diagnóstico en ejecuciones.detalle_json)')
+    assert.match(c.limitadas[0], /^\d+ms funding-rate BTC-USDT-SWAP$/)
 
     const siempre = fetchLento(() => LIMITE)
     const c2 = crearCliente(siempre, { esperar: crearEspera() })

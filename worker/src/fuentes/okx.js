@@ -55,6 +55,12 @@ const CODIGO_LIMITE = '50011'
 /** @param {number} ms */
 const esperarMs = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/** 'https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=1H&…' → 'candles BTC-USDT 1H'. @param {string} url */
+const resumir = (url) => {
+  const u = new URL(url)
+  return [u.pathname.split('/').pop(), u.searchParams.get('instId'), u.searchParams.get('bar')].filter(Boolean).join(' ')
+}
+
 /**
  * @param {string} mensaje
  * @param {boolean} limite la petición se rechazó por límite de ritmo (se puede reintentar)
@@ -107,6 +113,9 @@ export function crearCliente(fetch, {
   const cola = []
   let reintentos = 0
   let rubikPedidas = 0
+  const inicio = Date.now()
+  /** @type {string[]} */
+  const limitadas = []
   /** @type {Promise<void>|null} */
   let freno = null
   let frenosSeguidos = 0
@@ -151,6 +160,7 @@ export function crearCliente(fetch, {
           return datos
         } catch (e) {
           if (!(/** @type {any} */ (e)?.limite)) throw e
+          limitadas.push(`${Date.now() - inicio}ms ${resumir(url)}`)
           frenar()
           if (intento >= maximo || reintentos >= maxReintentos) throw e
           reintentos++
@@ -181,6 +191,10 @@ export function crearCliente(fetch, {
     /** Reintentos gastados hasta ahora. */
     get reintentos() {
       return reintentos
+    },
+    /** Respuestas limitadas (429/50011): «<ms desde el inicio> <endpoint> <instrumento> [barra]». */
+    get limitadas() {
+      return limitadas
     },
   }
 }

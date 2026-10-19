@@ -48,7 +48,8 @@ export function reintentosDisponibles(monedas, env) {
  * @param {number} ahora
  * @param {{ esperar?: (ms: number) => Promise<void>, maxReintentos?: number }} [opciones] esperar: pausas del
  *   límite de ritmo (inyectable en los tests); maxReintentos: reintentos de OKX que caben (reintentosDisponibles).
- * @returns {Promise<{ entradas: EntradaMoneda[], fng: Fng|null, fallos: string[], reintentosOkx: number }>}
+ * @returns {Promise<{ entradas: EntradaMoneda[], fng: Fng|null, fallos: string[], reintentosOkx: number,
+ *   limitadasOkx: string[] }>}
  */
 export async function recogerDatos(fetch, monedas, ahora, opciones = {}) {
   const okx = crearCliente(fetch, Object.fromEntries(Object.entries(opciones).filter(([, v]) => v !== undefined)))
@@ -64,7 +65,7 @@ export async function recogerDatos(fetch, monedas, ahora, opciones = {}) {
     velasEur: m.velasEur,
     derivados: completarDerivados(derivados.base[m.simbolo], cambio24h(m.velas['1h'], ahora)),
   }))
-  return { entradas, fng: fng.valor, fallos, reintentosOkx: okx.reintentos }
+  return { entradas, fng: fng.valor, fallos, reintentosOkx: okx.reintentos, limitadasOkx: okx.limitadas }
 }
 
 /**
@@ -193,7 +194,7 @@ export async function ejecutarMercado({ env, fetch, ahora, manual = false, idEje
     })))
     const fin = Date.now()
     await repo.finalizarEjecucion(db, id, {
-      fin, ok: true, detalle: { fallos, repetidas, operaciones, simulacionId: sim?.id ?? null, fng: datos.fng, reintentosOkx: datos.reintentosOkx },
+      fin, ok: true, detalle: { fallos, repetidas, operaciones, simulacionId: sim?.id ?? null, fng: datos.fng, reintentosOkx: datos.reintentosOkx, limitadasOkx: datos.limitadasOkx },
     })
     return { ejecucion: { id, tipo, inicio: ahora, fin, ok: true, fallos }, senales: enriquecidas, repetidas, operaciones }
   } catch (e) {
