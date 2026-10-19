@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0f17">
+<meta name="description" content="ORACLE: señales de BTC, ETH, SOL, BNB y XRP y un bot de paper trading con dinero virtual. Simulación.">
+<title>ORACLE</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icono.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ORACLE">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="styles.css">
+<script src="vendor/lightweight-charts.standalone.production.js" defer></script>
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<a class="saltar" href="#principal">Saltar al contenido</a>
+<header class="cabecera">
+  <p class="marca"><img src="icons/icono.svg" alt="" width="28" height="28"><span class="marca-texto">ORACLE</span></p>
+  <nav class="navegacion" aria-label="Secciones" hidden>
+    <a href="#/" data-seccion="panel">Panel</a>
+    <a href="#/bot" data-seccion="bot">Bot</a>
+    <a href="#/backtest" data-seccion="backtest">Backtest</a>
+  </nav>
+  <button type="button" id="salir" class="boton boton-discreto" hidden>Salir</button>
+</header>
+<main id="principal" tabindex="-1">
+  <noscript><p class="aviso aviso-error">ORACLE necesita JavaScript.</p></noscript>
+</main>
+<div id="estado" class="estado" aria-live="polite"></div>
+<footer class="pie">Simulación. No es asesoramiento financiero ni garantía de beneficio.</footer>
+</body>
+</html>
