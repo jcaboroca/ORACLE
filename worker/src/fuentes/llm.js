@@ -300,7 +300,18 @@ export function plantillaExplicacion(senal) {
     + `confianza ${confianza}, sin calibrar). ${partes.join(' · ')}.${contradiccion}`
 }
 
-/** Lo que ve el LLM de cada señal: datos estructurados, nada de texto libre. @param {Senal} senal */
+/** Con signo y 2 decimales en español ('+0,31', '-0,02', '0,00'). @param {number} x */
+const conSigno = (x) => {
+  const t = es(x)
+  if (t === '0,00' || t === '-0,00') return '0,00'
+  return x > 0 ? `+${t}` : t
+}
+
+/**
+ * Lo que ve el LLM de cada señal: datos estructurados con las cifras YA formateadas en español (2 decimales,
+ * porcentajes con «%»), nada de texto libre ni números en bruto (el modelo los copiaba con 9 decimales).
+ * @param {Senal} senal
+ */
 export function resumenParaLlm(senal) {
   /** @type {any} */
   const detalle = senal.detalle ?? {}
@@ -310,26 +321,48 @@ export function resumenParaLlm(senal) {
     const t = detalle.timeframes?.[tf]?.tendencia
     if (typeof t === 'string') tendencias[tf] = t
   }
+  /** @type {Record<string, number|null|undefined>} */
+  const crudos = /** @type {any} */ (senal.componentes) ?? {}
+  /** @type {Record<string, string>} */
+  const componentes = {}
+  for (const clave of Object.keys(NOMBRES)) {
+    const v = crudos[clave]
+    componentes[clave] = typeof v === 'number' ? conSigno(v) : 'ausente'
+  }
   return {
     simbolo: senal.simbolo,
     veredicto: senal.veredicto,
-    indiceConfianza: senal.indiceConfianza,
-    puntuacion: senal.puntuacion,
+    confianza: typeof senal.indiceConfianza === 'number' ? `${Math.round(senal.indiceConfianza * 100)} %` : null,
+    puntuacion: typeof senal.puntuacion === 'number' ? conSigno(senal.puntuacion) : null,
     motivo: senal.motivo,
-    componentes: senal.componentes,
+    componentes,
     ausentes: senal.ausentes,
     alineacion: senal.alineacion,
-    atrPct: senal.atrPct,
+    volatilidadAtr: typeof senal.atrPct === 'number' ? `${es(senal.atrPct * 100)} %` : null,
     tendencias,
   }
 }
 
 export const SISTEMA_EXPLICACION = [
-  'Eres el asistente de ORACLE, un simulador de trading de criptomonedas. Explica en español, en 2 o 3 frases claras',
-  'y sin jerga, por qué cada moneda tiene ese veredicto, usando SOLO los datos recibidos (componentes entre -1 y 1;',
-  'los ausentes no se usaron). No cambies el veredicto, no inventes cifras ni des consejos de inversión.',
-  'Responde SOLO con JSON con esta forma exacta: {"explicaciones":{"BTC":"texto"}}',
+  'Eres el asistente de ORACLE, un simulador de trading de criptomonedas. Para cada moneda, explica en español,',
+  'en 1 o 2 frases cortas y sin jerga, por qué tiene ese veredicto, usando SOLO los datos recibidos (componentes',
+  'entre -1 y 1, ya redondeados; «ausente» significa que no se usó). Si citas una cifra, cópiala tal cual:',
+  'nunca escribas números con más de 2 decimales. No cambies el veredicto, no inventes datos ni cifras y no des',
+  'consejos de inversión. Responde SOLO con JSON con esta forma exacta: {"explicaciones":{"BTC":"texto"}}',
 ].join(' ')
+
+/** Un número con más de 3 decimales (p. ej. «0.313897118»): el modelo ha copiado datos en bruto. */
+const NUMERO_EN_BRUTO = /\d[.,]\d{4,}/
+
+/**
+ * Explicación del LLM aceptable: 20-600 caracteres y sin números con más de 3 decimales.
+ * @param {unknown} texto
+ */
+export function explicacionValida(texto) {
+  if (typeof texto !== 'string') return false
+  const limpio = texto.trim()
+  return limpio.length >= 20 && limpio.length <= 600 && !NUMERO_EN_BRUTO.test(limpio)
+}
 
 /**
  * Una sola llamada para explicar todas las señales; la que falte o no valga usa la plantilla.
@@ -345,9 +378,7 @@ export async function explicarSenales({ env, fetch, senales }) {
     /** @type {Record<string, string>} */
     const validas = {}
     for (const [simbolo, texto] of Object.entries(e)) {
-      if (!simbolos.has(simbolo) || typeof texto !== 'string') continue
-      const limpio = texto.trim()
-      if (limpio.length >= 20 && limpio.length <= 600) validas[simbolo] = limpio
+      if (simbolos.has(simbolo) && explicacionValida(texto)) validas[simbolo] = /** @type {string} */ (texto).trim()
     }
     return Object.keys(validas).length > 0 ? validas : null
   }

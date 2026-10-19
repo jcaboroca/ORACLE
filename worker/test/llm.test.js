@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { readFileSync } from 'node:fs'
 import {
-  GEMINI, GROQ, TITULARES_POR_LLAMADA, explicarSenales, extraerJson, plantillaExplicacion, proveedores, puntuarTitulares,
-  rescatarTitulares,
+  GEMINI, GROQ, SISTEMA_EXPLICACION, TITULARES_POR_LLAMADA, explicarSenales, explicacionValida, extraerJson, plantillaExplicacion,
+  proveedores, puntuarTitulares, rescatarTitulares, resumenParaLlm,
 } from '../src/fuentes/llm.js'
 import { simularFetch } from './ayudantes.js'
 
@@ -202,6 +202,49 @@ describe('explicaciones', () => {
     assert.equal(Object.keys(textos).length, 2)
     const enviado = JSON.parse(ai.llamadas[0].entrada.messages[1].content)
     assert.deepEqual(enviado.senales[0].tendencias, { '1h': 'alcista', '4h': 'lateral', '1d': 'alcista' })
+  })
+
+  test('el LLM recibe las cifras ya formateadas en español (2 decimales, porcentajes con %), nunca números en bruto', async () => {
+    const s = senal({
+      puntuacion: 0.191588026, indiceConfianza: 0.495794013, atrPct: 0.00959245395285322,
+      componentes: { tecnico: 0.313897118, derivados: -0.0004, noticias: -0.021665035, fng: null }, ausentes: ['fng'],
+    })
+    assert.deepEqual(resumenParaLlm(s), {
+      simbolo: 'BTC', veredicto: 'COMPRAR', confianza: '50 %', puntuacion: '+0,19', motivo: null,
+      componentes: { tecnico: '+0,31', derivados: '0,00', noticias: '-0,02', fng: 'ausente' },
+      ausentes: ['fng'], alineacion: true, volatilidadAtr: '0,96 %',
+      tendencias: { '1h': 'alcista', '4h': 'lateral', '1d': 'alcista' },
+    })
+    const ai = simularAi(JSON.stringify({ explicaciones: { BTC: 'El técnico es positivo (+0,31) y las tendencias diaria y horaria son alcistas.' } }))
+    await explicarSenales({ env: { AI: ai, LLM_MODELO_CF: 'm' }, fetch: simularFetch(() => ({})), senales: [s] })
+    const enviado = ai.llamadas[0].entrada.messages[1].content
+    assert.doesNotMatch(enviado, /\d[.,]\d{3,}/, 'ninguna cifra con más de 2 decimales')
+    assert.match(ai.llamadas[0].entrada.messages[0].content, /más de 2 decimales/)
+    assert.match(SISTEMA_EXPLICACION, /1 o 2 frases cortas/)
+    assert.match(SISTEMA_EXPLICACION, /no inventes/)
+    assert.deepEqual(resumenParaLlm(senal({ veredicto: 'SIN_DATOS', puntuacion: null, indiceConfianza: null, atrPct: null })).puntuacion, null)
+  })
+
+  test('explicacionValida: rechaza cifras con más de 3 decimales (en bruto); acepta cifras redondeadas y precios con miles', () => {
+    assert.equal(explicacionValida('El veredicto de MANTENER se debe a que el componente técnico es positivo (0.313897118).'), false)
+    assert.equal(explicacionValida('El técnico es positivo (0,3139) y la tendencia es lateral en el corto plazo.'), false)
+    assert.equal(explicacionValida('El técnico es positivo (+0,31) y la confianza es del 50 %.'), true)
+    assert.equal(explicacionValida('El precio de 82.443,5 € está por encima de la media de 200 velas.'), true)
+    assert.equal(explicacionValida('El técnico pesa 0,314 en la puntuación final de la moneda.'), true)
+    assert.equal(explicacionValida('Corto.'), false)
+    assert.equal(explicacionValida('x'.repeat(601)), false)
+  })
+
+  test('una explicación del LLM con números en bruto cae a la plantilla; las demás se quedan', async () => {
+    const ai = simularAi(JSON.stringify({ explicaciones: {
+      BTC: 'El veredicto de MANTENER se debe a que el componente técnico es positivo (0.313897118).',
+      ETH: 'El técnico es negativo (-0,20) y las noticias no compensan, así que se mantiene.',
+    } }))
+    const senales = [senal({ veredicto: 'MANTENER' }), senal({ simbolo: 'ETH', veredicto: 'MANTENER' })]
+    const { textos, fallos } = await explicarSenales({ env: { AI: ai, LLM_MODELO_CF: 'm' }, fetch: simularFetch(() => ({})), senales })
+    assert.deepEqual(textos.BTC, { texto: plantillaExplicacion(senales[0]), motor: 'plantilla' })
+    assert.equal(textos.ETH.motor, 'cf')
+    assert.deepEqual(fallos, [])
   })
 
   test('textos demasiado cortos o largos no valen → plantilla', async () => {
