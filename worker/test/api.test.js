@@ -105,14 +105,16 @@ describe('PIN, bloqueo y CORS', () => {
     // 20 a la vez; la 11.ª lleva el PIN correcto: llega con 5 intentos ya en vuelo y no debe ni compararse.
     const pines = Array.from({ length: 20 }, (_, i) => (i === 10 ? PIN : `00${i}`))
     const r = await Promise.all(pines.map((pin) => pedir(db, '/api/simulaciones', { pin, ahora })))
-    assert.deepEqual(r.slice(0, 4).map((x) => x.cuerpo.detalle), [
-      'PIN incorrecto. Quedan 4 intentos.', 'PIN incorrecto. Quedan 3 intentos.', 'PIN incorrecto. Quedan 2 intentos.',
-      'PIN incorrecto. Quedan 1 intentos.',
+    // Los 5 primeros reservan y se comparan a la vez: el orden en que terminan (SHA-256 asíncrono) varía.
+    const comparados = r.slice(0, 5)
+    assert.deepEqual(comparados.filter((x) => x.estado === 401).map((x) => x.cuerpo.detalle).sort(), [
+      'PIN incorrecto. Quedan 1 intentos.', 'PIN incorrecto. Quedan 2 intentos.', 'PIN incorrecto. Quedan 3 intentos.',
+      'PIN incorrecto. Quedan 4 intentos.',
     ])
     assert.equal(r.filter((x) => x.estado === 401).length, 4, '4 fallos con 401 y el 5.º ya bloquea')
-    assert.deepEqual(r[4].cuerpo, {
+    assert.deepEqual(comparados.filter((x) => x.estado === 429).map((x) => x.cuerpo), [{
       error: 'bloqueado', detalle: 'Demasiados intentos con PIN incorrecto. Espera y vuelve a probar.', hasta: ahora + BLOQUEO_MS,
-    })
+    }])
     assert.ok(r.slice(5).every((x) => x.estado === 429 && x.cuerpo.error === 'ocupado'), 'el resto, sin comparar: reintento corto')
     assert.equal(r[10].estado, 429, 'el PIN correcto llegó con la IP ya agotada')
     const fila = await db.prepare('SELECT fallos, en_vuelo FROM intentos_pin').first()

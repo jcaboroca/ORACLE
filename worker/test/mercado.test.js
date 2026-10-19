@@ -221,6 +221,8 @@ describe('ejecutarMercado (cron)', () => {
     assert.ok(fetch.llamadas.every((l) => !l.url.includes('binance')), 'Binance no responde desde Cloudflare')
     assert.equal(fetch.llamadas.filter((l) => l.url.includes('-USDT&bar=') && l.url.endsWith('&limit=300')).length, 15)
     assert.equal(fetch.llamadas.filter((l) => l.url.includes('-EUR&bar=1H&limit=48')).length, 5)
+    const okx = fetch.llamadas.map((l) => l.url).filter((u) => u.startsWith('https://www.okx.com/'))
+    assert.ok(okx.slice(0, 20).every((u) => u.includes('/market/candles')), 'primero las velas (imprescindibles), luego los derivados')
     assert.ok(cuerposConsumidos(fetch), 'ningún cuerpo de respuesta queda sin leer o cancelar')
     assert.ok(db.llamadas <= 17, `${db.llamadas} llamadas a D1`)
   })

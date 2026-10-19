@@ -6,7 +6,7 @@ import { serie } from '../../test/ayudantes.js'
 import { completarDerivados, descargarDerivados, leerFunding, leerLongShort, leerOpenInterest } from '../src/fuentes/derivados.js'
 import { FNG, descargarFng, leerFng } from '../src/fuentes/fng.js'
 import {
-  CONCURRENCIA, ESPACIADO_RUBIK_MS, LIMITE_EUR, LIMITE_VELAS, MAX_REINTENTOS, OKX, PAUSA_REINTENTO_MS, VELAS,
+  CONCURRENCIA, ESPACIADO_RUBIK_MS, LIMITE_EUR, LIMITE_VELAS, MAX_REINTENTOS, OKX, PAUSA_MAXIMA_MS, PAUSA_REINTENTO_MS, VELAS,
   cambio24h, crearCliente, descargarMoneda, descargarVelas, leerVelas, ultimoCierre,
 } from '../src/fuentes/okx.js'
 import { cuerposConsumidos, fixtureJson, simularFetch } from './ayudantes.js'
@@ -218,6 +218,25 @@ describe('okx: cliente con límite de ritmo', () => {
     await assert.rejects(c2.pedir('/api/v5/public/funding-rate?instId=BTC-USDT-SWAP'), /^Error: HTTP 429 \(código 50011\)$/)
     assert.equal(siempre.medidas.llamadas.length, 2, 'un solo reintento por petición')
     assert.ok([...fetch.respuestas, ...siempre.respuestas].every((r) => r.bodyUsed))
+  })
+
+  test('el reintento no pierde su turno: va antes que las peticiones que esperaban en la cola', async () => {
+    let n = 0
+    const fetch = fetchLento(() => (n++ === 0 ? LIMITE : { cuerpo: OK }))
+    const c = crearCliente(fetch, { esperar: crearEspera(), concurrencia: 1 })
+    await Promise.all(['A', 'B', 'C'].map((x) => c.pedir(`/api/v5/market/candles?instId=${x}-USDT`)))
+    assert.deepEqual(fetch.medidas.llamadas.map((u) => new URL(u).searchParams.get('instId')), ['A-USDT', 'A-USDT', 'B-USDT', 'C-USDT'])
+  })
+
+  test('frenos seguidos sin ningún acierto se alargan (1,2 s, 2,4 s, 4,8 s… hasta 8 s); un acierto lo reinicia', async () => {
+    const respuestas = [LIMITE, LIMITE, LIMITE, LIMITE, LIMITE, { cuerpo: OK }, LIMITE, { cuerpo: OK }]
+    let n = 0
+    const fetch = fetchLento(() => respuestas[n++] ?? { cuerpo: OK })
+    const esperar = crearEspera()
+    const c = crearCliente(fetch, { esperar, concurrencia: 1 })
+    await Promise.allSettled(Array.from({ length: 5 }, (_, i) => c.pedir(`/api/v5/market/candles?instId=X${i}-USDT`)))
+    assert.deepEqual(esperar.esperas, [1200, 2400, 4800, 8000, 8000, 1200])
+    assert.equal(PAUSA_MAXIMA_MS, 8000)
   })
 
   test('el código 50011 también se reintenta aunque llegue con HTTP 200; otros errores no', async () => {

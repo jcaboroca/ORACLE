@@ -34,6 +34,11 @@ export const ESPACIADO_RUBIK_MS = 450
  * sale ninguna nueva) y después la limitada se reintenta una vez.
  */
 export const PAUSA_REINTENTO_MS = 1200
+/**
+ * Frenos seguidos sin ningún acierto entre medias duplican la pausa hasta este tope: la IP compartida
+ * puede seguir saturada varios segundos (en producción, una pausa fija de 1,2 s agotaba los reintentos).
+ */
+export const PAUSA_MAXIMA_MS = 8000
 /** Reintentos por ejecución entre todas las peticiones: 35 a OKX + 10 + F&G + 2 LLM = 48 ≤ 50 subpeticiones. */
 export const MAX_REINTENTOS = 10
 const CODIGO_LIMITE = '50011'
@@ -77,15 +82,15 @@ async function pedirOkx(fetch, url) {
  * Cliente de OKX para una ejecución: como mucho CONCURRENCIA peticiones en vuelo; las rubik, de una en una
  * y separadas ESPACIADO_RUBIK_MS. Una respuesta limitada (429/50011) activa un freno común de
  * PAUSA_REINTENTO_MS (ninguna petición sale mientras dura: las que ya estaban en vuelo son las únicas que
- * pueden fallar) y la limitada se reintenta una vez al acabar, con MAX_REINTENTOS en total para no pasar de
- * 50 subpeticiones.
+ * pueden fallar), que se duplica con cada freno seguido sin aciertos hasta PAUSA_MAXIMA_MS; la limitada se
+ * reintenta una vez al acabar, con MAX_REINTENTOS en total para no pasar de 50 subpeticiones.
  * @param {typeof fetch} fetch
  * @param {{ esperar?: (ms: number) => Promise<void>, concurrencia?: number, espaciadoRubik?: number,
- *   pausaReintento?: number, maxReintentos?: number }} [opciones] esperar: inyectable en los tests.
+ *   pausaReintento?: number, pausaMaxima?: number, maxReintentos?: number }} [opciones] esperar: inyectable en los tests.
  */
 export function crearCliente(fetch, {
   esperar = esperarMs, concurrencia = CONCURRENCIA, espaciadoRubik = ESPACIADO_RUBIK_MS,
-  pausaReintento = PAUSA_REINTENTO_MS, maxReintentos = MAX_REINTENTOS,
+  pausaReintento = PAUSA_REINTENTO_MS, pausaMaxima = PAUSA_MAXIMA_MS, maxReintentos = MAX_REINTENTOS,
 } = {}) {
   let enVuelo = 0
   /** @type {(() => void)[]} */
@@ -94,9 +99,11 @@ export function crearCliente(fetch, {
   let rubikPedidas = 0
   /** @type {Promise<void>|null} */
   let freno = null
+  let frenosSeguidos = 0
   const frenar = () => {
     if (!freno) {
-      freno = esperar(pausaReintento).then(() => { freno = null })
+      freno = esperar(Math.min(pausaReintento * 2 ** frenosSeguidos, pausaMaxima)).then(() => { freno = null })
+      frenosSeguidos++
     }
     return freno
   }
@@ -117,29 +124,29 @@ export function crearCliente(fetch, {
     else enVuelo--
   }
 
-  /** @param {string} url */
-  const intentar = async (url) => {
+  /**
+   * Pide `url` ocupando un hueco de CONCURRENCIA; si la limitan, espera al freno y la reintenta una vez
+   * sin soltar el hueco (así no pierde el turno frente a las que esperaban en la cola).
+   * @param {string} url
+   */
+  const conReintento = async (url) => {
     await adquirir()
     try {
-      while (freno) await freno
-      return await pedirOkx(fetch, url)
-    } catch (e) {
-      if (/** @type {any} */ (e)?.limite) frenar()
-      throw e
+      for (let intento = 0; ; intento++) {
+        while (freno) await freno
+        try {
+          const datos = await pedirOkx(fetch, url)
+          frenosSeguidos = 0
+          return datos
+        } catch (e) {
+          if (!(/** @type {any} */ (e)?.limite)) throw e
+          frenar()
+          if (intento > 0 || reintentos >= maxReintentos) throw e
+          reintentos++
+        }
+      }
     } finally {
       liberar()
-    }
-  }
-
-  /** @param {string} url */
-  const conReintento = async (url) => {
-    try {
-      return await intentar(url)
-    } catch (e) {
-      if (!(/** @type {any} */ (e)?.limite) || reintentos >= maxReintentos) throw e
-      reintentos++
-      // intentar() espera a que pase el freno que activó este fallo antes de volver a pedir.
-      return intentar(url)
     }
   }
 
