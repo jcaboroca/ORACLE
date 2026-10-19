@@ -1,8 +1,9 @@
 // @ts-check
 // Cron `3 * * * *` (mercado y bot) y POST /api/analizar (solo señales; nunca opera). Spec §5 y §7.
 // Datos de mercado de OKX (desde Cloudflare Binance responde 403). Subpeticiones externas con 5 monedas:
-// 20 velas (15 USDT de 300 + 5 EUR de 48) + 15 derivados (3 por moneda) + hasta 6 reintentos por límite de
-// ritmo + 1 Fear & Greed + hasta 2 LLM (Groq y Gemini; Workers AI va por binding) = 38-44 de 50.
+// 20 velas (15 USDT de 300 + 5 EUR de 48) + 15 derivados (3 por moneda) + 1 Fear & Greed + hasta 2 LLM
+// (Groq y Gemini, solo si tienen clave; Workers AI va por binding) = 36-38 de 50; los reintentos por límite
+// de ritmo de OKX llenan el resto dejando 1 de margen (11-13).
 // Llamadas a D1: como mucho 17 (5 de ellas, un lote atómico por moneda).
 import { valorCartera, valorHodl, velaDeDecision } from '../../../core/bot.js'
 import { ESTRATEGIA_ACTIVA, estrategia as obtenerEstrategia } from '../../../core/estrategias.js'
@@ -11,7 +12,7 @@ import { HORA } from '../../../core/velas.js'
 import { CAPITAL_POR_DEFECTO, leerMonedas } from '../config.js'
 import { completarDerivados, descargarDerivados } from '../fuentes/derivados.js'
 import { descargarFng } from '../fuentes/fng.js'
-import { explicarSenales } from '../fuentes/llm.js'
+import { explicarSenales, proveedores } from '../fuentes/llm.js'
 import { cambio24h, crearCliente, descargarMoneda, ultimoCierre } from '../fuentes/okx.js'
 import * as repo from '../repositorio.js'
 
@@ -23,17 +24,34 @@ import * as repo from '../repositorio.js'
 /** @param {unknown} e */
 const mensaje = (e) => (e instanceof Error ? e.message : String(e))
 
+/** Subpeticiones externas por invocación en el plan gratuito. */
+export const SUBPETICIONES = 50
+/** Peticiones a OKX por moneda: 4 series de velas y 3 derivados. */
+export const PETICIONES_OKX_POR_MONEDA = 7
+
+/**
+ * Reintentos de OKX que caben en la invocación: lo que sobra de SUBPETICIONES tras las peticiones fijas
+ * (OKX, Fear & Greed y los LLM externos configurados), con 1 de margen.
+ * @param {number} monedas
+ * @param {import('../fuentes/llm.js').EntornoLlm} env
+ */
+export function reintentosDisponibles(monedas, env) {
+  const llmExternos = proveedores(env, fetch).filter((p) => p.motor !== 'cf').length
+  return Math.max(0, SUBPETICIONES - monedas * PETICIONES_OKX_POR_MONEDA - 1 - llmExternos - 1)
+}
+
 /**
  * Velas y derivados (OKX, con un solo cliente que limita el ritmo) y Fear & Greed en paralelo.
  * Nada de esto lanza: lo que falla se anota.
  * @param {typeof fetch} fetch
  * @param {string[]} monedas
  * @param {number} ahora
- * @param {(ms: number) => Promise<void>} [esperar] pausas del límite de ritmo (inyectable en los tests)
+ * @param {{ esperar?: (ms: number) => Promise<void>, maxReintentos?: number }} [opciones] esperar: pausas del
+ *   límite de ritmo (inyectable en los tests); maxReintentos: reintentos de OKX que caben (reintentosDisponibles).
  * @returns {Promise<{ entradas: EntradaMoneda[], fng: Fng|null, fallos: string[], reintentosOkx: number }>}
  */
-export async function recogerDatos(fetch, monedas, ahora, esperar) {
-  const okx = crearCliente(fetch, esperar ? { esperar } : {})
+export async function recogerDatos(fetch, monedas, ahora, opciones = {}) {
+  const okx = crearCliente(fetch, Object.fromEntries(Object.entries(opciones).filter(([, v]) => v !== undefined)))
   const [porMoneda, derivados, fng] = await Promise.all([
     Promise.all(monedas.map((m) => descargarMoneda(okx, m))),
     descargarDerivados(okx, monedas),
@@ -148,7 +166,7 @@ export async function ejecutarMercado({ env, fetch, ahora, manual = false, idEje
     let sim = await repo.simulacionActiva(db)
     if (!sim && !manual) sim = await repo.crearSimulacion(db, { capitalInicial: CAPITAL_POR_DEFECTO, version: ESTRATEGIA_ACTIVA, ahora })
     const est = obtenerEstrategia(sim?.estrategia_version ?? ESTRATEGIA_ACTIVA)
-    const datos = await recogerDatos(fetch, monedas, ahora, esperar)
+    const datos = await recogerDatos(fetch, monedas, ahora, { esperar, maxReintentos: reintentosDisponibles(monedas.length, env) })
     fallos.push(...datos.fallos)
     const titulares = await repo.titularesParaEstrategia(db, ahora - 24 * HORA, ahora)
     const fngValor = datos.fng?.valor ?? null

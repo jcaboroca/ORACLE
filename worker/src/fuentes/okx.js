@@ -45,7 +45,10 @@ export const PAUSA_MAXIMA_MS = 8000
  * cayendo con la IP compartida saturada.
  */
 export const REINTENTOS_VELAS = 2
-/** Reintentos por ejecución entre todas las peticiones: 35 a OKX + 10 + F&G + 2 LLM = 48 ≤ 50 subpeticiones. */
+/**
+ * Reintentos por ejecución entre todas las peticiones, por defecto: 35 a OKX + 10 + F&G + 2 LLM = 48 ≤ 50.
+ * La ejecución de mercado usa los que de verdad caben (reintentosDisponibles de ejecuciones/mercado.js).
+ */
 export const MAX_REINTENTOS = 10
 const CODIGO_LIMITE = '50011'
 
