@@ -5,7 +5,8 @@
 import { HORA, VENTANA } from '../../core/velas.js'
 import { serie } from '../../test/ayudantes.js'
 import { GEMINI, GROQ } from '../src/fuentes/llm.js'
-import { aRespuestaOkx, fixtureJson, simularFetch } from './ayudantes.js'
+import { BYBIT_VELAS } from '../src/fuentes/bybit.js'
+import { aRespuestaBybit, aRespuestaOkx, fixtureJson, simularFetch } from './ayudantes.js'
 
 /** Inicio de la vela 1H que dispara el stop de BTC. Alineado a día y a 4 h. */
 export const CIERRE = Date.UTC(2026, 9, 1)
@@ -88,21 +89,33 @@ export function entradasEn(escenario, ahora) {
 const FNG = fixtureJson('alternative-fng.json')
 
 const BARRAS = /** @type {Record<string, '1h'|'4h'|'1d'>} */ ({ '1H': '1h', '4H': '4h', '1Dutc': '1d' })
+const INTERVALOS_BYBIT = /** @type {Record<string, '1h'|'4h'|'1d'>} */ ({ 60: '1h', 240: '4h', D: '1d' })
 
 /**
- * OKX y alternative.me simulados sobre el escenario en el instante `ahora`. Los derivados de OKX responden
- * 503 (salvo el funding de `funding`), Groq y Gemini 500. Una moneda que no está en el escenario usa las
- * series de BTC.
+ * OKX, Bybit (respaldo de las velas USDT) y alternative.me simulados sobre el escenario en el instante `ahora`.
+ * Los derivados de OKX responden 503 (salvo el funding de `funding`), Groq y Gemini 500. Una moneda que no
+ * está en el escenario usa las series de BTC.
  * @param {ReturnType<typeof crearEscenario>} escenario
  * @param {number} ahora
- * @param {{ caidas?: string[], funding?: Record<string, string>|null, limitado?: boolean }} [op]
- *   caidas: instrumentos cuyas velas responden 500 (p. ej. 'SOL-USDT'); funding: fundingRate por perpetuo
- *   (p. ej. { 'BTC-USDT-SWAP': '0.0006' }); limitado: todo OKX responde 429 con el código 50011.
+ * @param {{ caidas?: string[], funding?: Record<string, string>|null, limitado?: boolean | ((url: string) => boolean),
+ *   bybitCaido?: boolean }} [op]
+ *   caidas: instrumentos cuyas velas responden 500 en OKX y en Bybit (p. ej. 'SOL-USDT'); funding: fundingRate
+ *   por perpetuo (p. ej. { 'BTC-USDT-SWAP': '0.0006' }); limitado: OKX (todo, o las URL que diga la función)
+ *   responde 429 con el código 50011; bybitCaido: Bybit responde 403.
  */
-export function fetchEscenario(escenario, ahora, { caidas = [], funding = null, limitado = false } = {}) {
+export function fetchEscenario(escenario, ahora, { caidas = [], funding = null, limitado = false, bybitCaido = false } = {}) {
   return simularFetch((url) => {
-    if (url.startsWith('https://www.okx.com/') && limitado) {
+    if (url.startsWith('https://www.okx.com/') && (typeof limitado === 'function' ? limitado(url) : limitado)) {
       return { estado: 429, cuerpo: { code: '50011', msg: 'Too Many Requests', data: [] } }
+    }
+    if (url.startsWith(`${BYBIT_VELAS}?`)) {
+      const p = new URL(url).searchParams
+      const simbolo = /** @type {string} */ (p.get('symbol')).replace(/USDT$/, '')
+      if (bybitCaido || caidas.includes(`${simbolo}-USDT`)) return { estado: 403, cuerpo: '' }
+      const intervalo = INTERVALOS_BYBIT[/** @type {string} */ (p.get('interval'))]
+      if (!intervalo || p.get('category') !== 'spot') throw new Error(`petición a Bybit inesperada en el test: ${url}`)
+      const velas = (escenario[simbolo] ?? escenario.BTC)[intervalo]
+      return { cuerpo: aRespuestaBybit(servidasEn(velas, ahora, Number(p.get('limit'))), `${simbolo}USDT`) }
     }
     if (url.startsWith('https://www.okx.com/api/v5/market/candles?')) {
       const p = new URL(url).searchParams

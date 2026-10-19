@@ -57,7 +57,9 @@ base de datos y una API JSON protegida por PIN para la PWA. Usa exactamente el m
 `core/hora.js` que el backtest, con la estrategia guardada en cada simulación.
 
 - Fuentes: velas y derivados (opcionales) de OKX (USDT para indicadores, EUR para el bot; desde
-  Cloudflare Binance responde 403), Fear & Greed de alternative.me, 14 RSS y Reddit (best-effort).
+  Cloudflare Binance responde 403), con las velas cerradas y el funding en caché en D1 (cada hora solo
+  se piden las velas nuevas) y Bybit spot como respaldo de las velas USDT; Fear & Greed de
+  alternative.me, 14 RSS y Reddit (best-effort).
   El backtest usa histórico de Binance: misma lógica y misma ventana de 299 velas, distinta fuente
   (spec §4 y §8).
 - Titulares puntuados por un LLM en cascada: Workers AI → Groq → Gemini → léxico local
@@ -69,7 +71,7 @@ base de datos y una API JSON protegida por PIN para la PWA. Usa exactamente el m
   [docs/superpowers/plans/2026-10-18-oracle-plan-2-worker.md](docs/superpowers/plans/2026-10-18-oracle-plan-2-worker.md).
   Secrets: `ORACLE_PIN` y, opcionales, `GROQ_API_KEY` y `GEMINI_API_KEY`.
   La base D1 `oracle` (WEUR) ya existe y su id está en `worker/wrangler.toml`; antes del primer
-  despliegue se aplican las migraciones `0001`-`0004` con `npx wrangler@4 d1 migrations apply oracle --remote`.
+  despliegue se aplican las migraciones `0001`-`0005` con `npx wrangler@4 d1 migrations apply oracle --remote`.
 
 No existe ninguna ruta que envíe órdenes a un exchange: es una simulación.
 

@@ -1,11 +1,19 @@
 // @ts-check
 // Derivados del perpetuo {SYM}-USDT-SWAP de OKX (opcionales: si fallan, el componente queda ausente).
-// 3·n subpeticiones: funding, long/short de cuentas y open interest horario. Las dos últimas son
-// estadísticas «rubik» (límite estricto por IP): el cliente de okx.js las hace de una en una.
+// Funding, long/short de cuentas y open interest horario. El funding se liquida cada 8 h: se guarda en D1
+// (cache_funding) y se pide como mucho cada FUNDING_VIGENCIA_MS. Long/short y open interest, cada hora: son
+// estadísticas «rubik» (límite estricto por IP) y el cliente de okx.js las hace de una en una.
+// Subpeticiones: 2·n rubik + los funding que toque refrescar (0-n).
 
 /** @typedef {import('../../../core/estrategia-v1.js').Derivados} Derivados */
 /** @typedef {{ funding: number|null, ratioLongShort: number|null, oiCambio24h: number|null }} DerivadosBase */
 /** @typedef {import('./okx.js').ClienteOkx} ClienteOkx */
+/** @typedef {{ valor: number, actualizadoEn: number }} FundingGuardado */
+
+/** El funding guardado se usa sin pedirlo durante 8 h (un periodo de liquidación). */
+export const FUNDING_VIGENCIA_MS = 8 * 3_600_000
+/** Si al refrescarlo falla, el guardado vale todavía hasta 24 h después de pedirlo. */
+export const FUNDING_CADUCIDAD_MS = 24 * 3_600_000
 
 export const RUTA_FUNDING = '/api/v5/public/funding-rate'
 export const RUTA_LONG_SHORT = '/api/v5/rubik/stat/contracts/long-short-account-ratio-contract'
@@ -69,33 +77,61 @@ export function leerOpenInterest(datos) {
 const mensaje = (e) => (e instanceof Error ? e.message : String(e))
 
 /**
- * Nunca lanza: lo que falla queda null y se anota.
+ * Monedas cuyo funding hay que pedir: sin guardar, guardado hace 8 h o más (o con fecha futura).
+ * @param {string[]} simbolos
+ * @param {Record<string, FundingGuardado>} guardado
+ * @param {number} ahora
+ */
+export function fundingAPedir(simbolos, guardado, ahora) {
+  return simbolos.filter((s) => {
+    const g = guardado[s]
+    return !g || !(ahora >= g.actualizadoEn && ahora - g.actualizadoEn < FUNDING_VIGENCIA_MS)
+  })
+}
+
+/**
+ * Nunca lanza: lo que falla queda null y se anota (el funding que falla usa el guardado si tiene < 24 h).
  * @param {ClienteOkx} cliente
  * @param {string[]} simbolos
- * @returns {Promise<{ base: Record<string, DerivadosBase>, fallos: string[] }>}
+ * @param {{ funding?: Record<string, FundingGuardado>, ahora?: number }} [cache] funding guardado en D1
+ * @returns {Promise<{ base: Record<string, DerivadosBase>, fallos: string[], fundingNuevo: Record<string, number> }>}
  */
-export async function descargarDerivados(cliente, simbolos) {
+export async function descargarDerivados(cliente, simbolos, { funding: guardado = {}, ahora = 0 } = {}) {
   /** @type {string[]} */
   const fallos = []
+  const pedir = new Set(fundingAPedir(simbolos, guardado, ahora))
   const porMoneda = await Promise.allSettled(simbolos.flatMap((s) => [
-    cliente.pedir(`${RUTA_FUNDING}?instId=${perpetuo(s)}`).then((d) => leerFunding(d, s)),
+    pedir.has(s)
+      ? cliente.pedir(`${RUTA_FUNDING}?instId=${perpetuo(s)}`).then((d) => leerFunding(d, s))
+      : Promise.resolve(guardado[s].valor),
     cliente.pedir(`${RUTA_LONG_SHORT}?instId=${perpetuo(s)}&period=1H&limit=1`).then(leerLongShort),
     cliente.pedir(`${RUTA_OPEN_INTEREST}?instId=${perpetuo(s)}&period=1H&limit=25`).then(leerOpenInterest),
   ]))
   /** @type {Record<string, DerivadosBase>} */
   const base = {}
+  /** @type {Record<string, number>} */
+  const fundingNuevo = {}
   simbolos.forEach((s, i) => {
-    const [funding, ls, oi] = porMoneda.slice(3 * i, 3 * i + 3)
-    if (funding.status === 'rejected') fallos.push(`derivados funding ${s}: ${mensaje(funding.reason)}`)
+    const [f, ls, oi] = porMoneda.slice(3 * i, 3 * i + 3)
+    /** @type {number|null} */
+    let valorFunding = null
+    if (f.status === 'fulfilled') {
+      valorFunding = f.value
+      if (pedir.has(s)) fundingNuevo[s] = f.value
+    } else {
+      fallos.push(`derivados funding ${s}: ${mensaje(f.reason)}`)
+      const g = guardado[s]
+      if (g && ahora >= g.actualizadoEn && ahora - g.actualizadoEn < FUNDING_CADUCIDAD_MS) valorFunding = g.valor
+    }
     if (ls.status === 'rejected') fallos.push(`derivados long/short ${s}: ${mensaje(ls.reason)}`)
     if (oi.status === 'rejected') fallos.push(`derivados open interest ${s}: ${mensaje(oi.reason)}`)
     base[s] = {
-      funding: funding.status === 'fulfilled' ? funding.value : null,
+      funding: valorFunding,
       ratioLongShort: ls.status === 'fulfilled' ? ls.value : null,
       oiCambio24h: oi.status === 'fulfilled' ? oi.value : null,
     }
   })
-  return { base, fallos }
+  return { base, fallos, fundingNuevo }
 }
 
 /**

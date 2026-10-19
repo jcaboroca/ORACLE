@@ -7,7 +7,7 @@ import { completarDerivados, descargarDerivados, leerFunding, leerLongShort, lee
 import { FNG, descargarFng, leerFng } from '../src/fuentes/fng.js'
 import {
   CONCURRENCIA, ESPACIADO_RUBIK_MS, LIMITE_EUR, LIMITE_VELAS, MAX_REINTENTOS, OKX, PAUSA_MAXIMA_MS, PAUSA_REINTENTO_MS, REINTENTOS_VELAS, VELAS,
-  cambio24h, crearCliente, descargarMoneda, descargarVelas, leerVelas, ultimoCierre,
+  cambio24h, crearCliente, crearPresupuesto, descargarVelas, leerVelas, ultimoCierre,
 } from '../src/fuentes/okx.js'
 import { cuerposConsumidos, fixtureJson, simularFetch } from './ayudantes.js'
 
@@ -93,26 +93,6 @@ describe('okx: velas', () => {
     const noJson = simularFetch(() => ({ cuerpo: 'no es json' }))
     await assert.rejects(descargarVelas(cliente(noJson), 'BTC-USDT', '4h'), /no es JSON/)
     for (const f of [http, codigo, sinDatos, noJson]) assert.ok(cuerposConsumidos(f))
-  })
-
-  test('descargarMoneda pide 4 series (USDT 1H/4H/1Dutc con 300 y EUR 1H con 48); la que falla queda vacía y se anota', async () => {
-    const fetch = simularFetch((url) => {
-      if (url.includes('bar=4H')) return { estado: 500, cuerpo: '' }
-      if (url.includes('-EUR')) return { cuerpo: VELAS_EUR }
-      return { cuerpo: url.includes('bar=1Dutc') ? VELAS_1D : VELAS_1H }
-    })
-    const m = await descargarMoneda(cliente(fetch), 'BTC')
-    assert.deepEqual(fetch.llamadas.map((l) => l.url), [
-      `${VELAS}?instId=BTC-USDT&bar=1H&limit=300`,
-      `${VELAS}?instId=BTC-USDT&bar=4H&limit=300`,
-      `${VELAS}?instId=BTC-USDT&bar=1Dutc&limit=300`,
-      `${VELAS}?instId=BTC-EUR&bar=1H&limit=48`,
-    ])
-    assert.equal(m.velas['1h'].length, 5)
-    assert.deepEqual(m.velas['4h'], [])
-    assert.equal(m.velas['1d'].length, 5)
-    assert.equal(m.velasEur.length, 3)
-    assert.deepEqual(m.fallos, ['velas BTC-USDT 4h: HTTP 500'])
   })
 
   test('ultimoCierre ignora la vela en curso del fixture EUR', () => {
@@ -271,6 +251,21 @@ describe('okx: cliente con límite de ritmo', () => {
     assert.equal(MAX_REINTENTOS, 10, '20 velas + 15 derivados + 10 + F&G + 2 LLM = 48 ≤ 50')
     assert.equal(c.reintentos, MAX_REINTENTOS)
     assert.equal(fetch.medidas.llamadas.length, 35 + MAX_REINTENTOS)
+  })
+
+  test('presupuesto compartido: los reintentos de OKX no gastan la reserva (es para Bybit); gastar(true) sí', async () => {
+    const presupuesto = crearPresupuesto(3)
+    presupuesto.reserva = 2
+    const fetch = simularFetch(() => ({ estado: 429, cuerpo: { code: '50011', msg: 'Too Many Requests', data: [] } }))
+    const c = crearCliente(fetch, { esperar: crearEspera(), presupuesto })
+    await assert.rejects(c.pedir('/api/v5/market/candles?instId=BTC-USDT&bar=1H&limit=3', REINTENTOS_VELAS), /HTTP 429 \(código 50011\)/)
+    assert.equal(fetch.llamadas.length, 2, '1 petición + 1 reintento: los otros 2 están reservados')
+    assert.equal(c.reintentos, 1)
+    assert.equal(presupuesto.disponibles, 2)
+    assert.equal(presupuesto.gastar(), false)
+    assert.equal(presupuesto.gastar(true), true)
+    assert.equal(presupuesto.disponibles, 1)
+    assert.equal(crearPresupuesto(-3).disponibles, 0)
   })
 
   test('la URL base es la de OKX', () => {

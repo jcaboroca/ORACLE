@@ -33,7 +33,7 @@ describe('D1 simulado', () => {
     const db = crearD1()
     const { results } = await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all()
     assert.deepEqual(results.map((r) => r.name), [
-      'capital', 'decisiones', 'ejecuciones', 'intentos_pin', 'operaciones', 'pin_global', 'posiciones', 'progreso',
+      'cache_funding', 'cache_velas', 'capital', 'decisiones', 'ejecuciones', 'intentos_pin', 'operaciones', 'pin_global', 'posiciones', 'progreso',
       'senales_actuales', 'simulaciones', 'titulares',
     ])
   })

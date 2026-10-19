@@ -47,10 +47,31 @@ export const PAUSA_MAXIMA_MS = 8000
 export const REINTENTOS_VELAS = 2
 /**
  * Reintentos por ejecución entre todas las peticiones, por defecto: 35 a OKX + 10 + F&G + 2 LLM = 48 ≤ 50.
- * La ejecución de mercado usa los que de verdad caben (reintentosDisponibles de ejecuciones/mercado.js).
+ * La ejecución de mercado pasa su propio presupuesto con lo que de verdad cabe (ejecuciones/mercado.js).
  */
 export const MAX_REINTENTOS = 10
 const CODIGO_LIMITE = '50011'
+
+/**
+ * Subpeticiones fuera del plan de una ejecución (reintentos de OKX, series enteras por un hueco de la caché y
+ * el respaldo de Bybit), compartidas entre todas. `reserva`: las que solo puede gastar quien pida
+ * `deReserva` (el respaldo de Bybit), para que los reintentos de OKX no se las coman todas.
+ * @param {number} disponibles
+ */
+export function crearPresupuesto(disponibles) {
+  return {
+    disponibles: Math.max(0, disponibles),
+    reserva: 0,
+    /** Gasta una si queda alguna libre (con `deReserva`, también de la reserva). @param {boolean} [deReserva] */
+    gastar(deReserva = false) {
+      if (this.disponibles - (deReserva ? 0 : this.reserva) <= 0) return false
+      this.disponibles--
+      return true
+    },
+  }
+}
+
+/** @typedef {ReturnType<typeof crearPresupuesto>} Presupuesto */
 
 /** @param {number} ms */
 const esperarMs = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -98,15 +119,17 @@ async function pedirOkx(fetch, url) {
  * y separadas ESPACIADO_RUBIK_MS. Una respuesta limitada (429/50011) activa un freno común de
  * PAUSA_REINTENTO_MS (ninguna petición sale mientras dura: las que ya estaban en vuelo son las únicas que
  * pueden fallar), que se duplica con cada freno seguido sin aciertos hasta PAUSA_MAXIMA_MS; la limitada se
- * reintenta al acabar (una vez; las velas, REINTENTOS_VELAS), con MAX_REINTENTOS en total para no pasar de
- * 50 subpeticiones.
+ * reintenta al acabar (una vez; las velas, REINTENTOS_VELAS) si queda presupuesto (por defecto, MAX_REINTENTOS
+ * en total) para no pasar de 50 subpeticiones.
  * @param {typeof fetch} fetch
  * @param {{ esperar?: (ms: number) => Promise<void>, concurrencia?: number, espaciadoRubik?: number,
- *   pausaReintento?: number, pausaMaxima?: number, maxReintentos?: number }} [opciones] esperar: inyectable en los tests.
+ *   pausaReintento?: number, pausaMaxima?: number, maxReintentos?: number, presupuesto?: Presupuesto }} [opciones]
+ *   esperar: inyectable en los tests; presupuesto: compartido con el resto de la ejecución (manda sobre maxReintentos).
  */
 export function crearCliente(fetch, {
   esperar = esperarMs, concurrencia = CONCURRENCIA, espaciadoRubik = ESPACIADO_RUBIK_MS,
   pausaReintento = PAUSA_REINTENTO_MS, pausaMaxima = PAUSA_MAXIMA_MS, maxReintentos = MAX_REINTENTOS,
+  presupuesto = crearPresupuesto(maxReintentos),
 } = {}) {
   let enVuelo = 0
   /** @type {(() => void)[]} */
@@ -162,7 +185,7 @@ export function crearCliente(fetch, {
           if (!(/** @type {any} */ (e)?.limite)) throw e
           limitadas.push(`${Date.now() - inicio}ms ${resumir(url)}`)
           frenar()
-          if (intento >= maximo || reintentos >= maxReintentos) throw e
+          if (intento >= maximo || !presupuesto.gastar()) throw e
           reintentos++
         }
       }
@@ -202,14 +225,16 @@ export function crearCliente(fetch, {
 /** @typedef {ReturnType<typeof crearCliente>} ClienteOkx */
 
 /**
- * Valida el `data` de /market/candles (filas de la más reciente a la más antigua) y lo convierte en velas
- * de core ordenadas de la más antigua a la más reciente, todo en una pasada. `fin` = inicio + duración.
- * La vela en curso (confirm "0") se incluye: cerradasHasta la descarta por su `fin`.
+ * Valida filas de velas [inicio, apertura, máximo, mínimo, cierre, volumen, …] de la más reciente a la más
+ * antigua (así las sirven OKX y Bybit) y las convierte en velas de core ordenadas de la más antigua a la más
+ * reciente, todo en una pasada. `fin` = inicio + duración. La vela en curso se incluye: cerradasHasta la
+ * descarta por su `fin`.
  * @param {unknown[]} datos
  * @param {number} duracion ms de la barra; cada vela debe empezar en un múltiplo (alineada a UTC)
+ * @param {number} campos campos mínimos por fila
  * @returns {Vela[]}
  */
-export function leerVelas(datos, duracion) {
+export function leerFilasVelas(datos, duracion, campos) {
   if (!Array.isArray(datos)) throw new TypeError('velas: no es una lista')
   const n = datos.length
   /** @type {Vela[]} */
@@ -217,7 +242,7 @@ export function leerVelas(datos, duracion) {
   let posterior = Infinity
   for (let i = 0; i < n; i++) {
     const fila = datos[i]
-    if (!Array.isArray(fila) || fila.length < 9) throw new TypeError('velas: fila mal formada')
+    if (!Array.isArray(fila) || fila.length < campos) throw new TypeError('velas: fila mal formada')
     const inicio = Number(fila[0])
     const apertura = Number(fila[1])
     const maximo = Number(fila[2])
@@ -243,6 +268,14 @@ export function leerVelas(datos, duracion) {
 }
 
 /**
+ * Valida el `data` de /market/candles de OKX (filas de 9 campos, la más reciente primero; confirm "0" en la
+ * vela en curso) y lo convierte en velas de core ascendentes (leerFilasVelas).
+ * @param {unknown[]} datos
+ * @param {number} duracion
+ */
+export const leerVelas = (datos, duracion) => leerFilasVelas(datos, duracion, 9)
+
+/**
  * @param {ClienteOkx} cliente
  * @param {string} instId p. ej. BTC-USDT o BTC-EUR
  * @param {Intervalo} intervalo
@@ -252,31 +285,6 @@ export function leerVelas(datos, duracion) {
 export async function descargarVelas(cliente, instId, intervalo, limite = LIMITE_VELAS) {
   const datos = await cliente.pedir(`${RUTA_VELAS}?instId=${instId}&bar=${BARRAS[intervalo]}&limit=${limite}`, REINTENTOS_VELAS)
   return leerVelas(datos, DURACION[intervalo])
-}
-
-/**
- * Las 4 series de una moneda (4 subpeticiones): USDT 1H/4H/1Dutc con LIMITE_VELAS y EUR 1H con LIMITE_EUR.
- * Una serie que falla queda vacía y se anota.
- * @param {ClienteOkx} cliente
- * @param {string} simbolo
- */
-export async function descargarMoneda(cliente, simbolo) {
-  /** @type {[string, Intervalo, number][]} */
-  const pedidos = [
-    [`${simbolo}-USDT`, '1h', LIMITE_VELAS], [`${simbolo}-USDT`, '4h', LIMITE_VELAS], [`${simbolo}-USDT`, '1d', LIMITE_VELAS],
-    [`${simbolo}-EUR`, '1h', LIMITE_EUR],
-  ]
-  const resultados = await Promise.allSettled(pedidos.map(([instId, intervalo, limite]) => descargarVelas(cliente, instId, intervalo, limite)))
-  /** @type {string[]} */
-  const fallos = []
-  /** @param {number} i @returns {Vela[]} */
-  const serie = (i) => {
-    const r = resultados[i]
-    if (r.status === 'fulfilled') return r.value
-    fallos.push(`velas ${pedidos[i][0]} ${pedidos[i][1]}: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`)
-    return []
-  }
-  return { simbolo, velas: { '1h': serie(0), '4h': serie(1), '1d': serie(2) }, velasEur: serie(3), fallos }
 }
 
 /**

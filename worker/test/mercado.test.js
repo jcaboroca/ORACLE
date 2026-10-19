@@ -210,7 +210,7 @@ describe('ejecutarMercado (cron)', () => {
     assert.equal(eth, 'abierta', 'ETH no tiene funding en la respuesta: derivados ausentes')
   })
 
-  test('presupuesto §9 con 5 monedas: 38 subpeticiones externas, todas las de mercado a OKX, y como mucho 17 llamadas a D1', async () => {
+  test('presupuesto §9 con 5 monedas y la caché vacía: 38 subpeticiones externas, todas las de mercado a OKX, y como mucho 19 llamadas a D1', async () => {
     const db = crearD1()
     const ahora = ahoraDe(0)
     const fetch = fetchEscenario(crearEscenario(), ahora)
@@ -224,23 +224,109 @@ describe('ejecutarMercado (cron)', () => {
     const okx = fetch.llamadas.map((l) => l.url).filter((u) => u.startsWith('https://www.okx.com/'))
     assert.ok(okx.slice(0, 20).every((u) => u.includes('/market/candles')), 'primero las velas (imprescindibles), luego los derivados')
     assert.ok(cuerposConsumidos(fetch), 'ningún cuerpo de respuesta queda sin leer o cancelar')
-    assert.ok(db.llamadas <= 17, `${db.llamadas} llamadas a D1`)
+    assert.ok(db.llamadas <= 19, `${db.llamadas} llamadas a D1`)
+    const detalle = JSON.parse(await db.prepare('SELECT detalle_json FROM ejecuciones').first('detalle_json'))
+    assert.equal(detalle.subpeticiones, 38)
+    assert.deepEqual(detalle.velasBybit, [])
+    assert.equal(await db.prepare('SELECT COUNT(*) AS n FROM cache_velas').first('n'), 20)
   })
 
-  test('OKX limitando (429/50011) en todo: los reintentos llenan el hueco hasta 49 subpeticiones (≤ 50), SIN_DATOS y ejecución ok', async () => {
-    for (const [claves, llm, reintentos] of /** @type {const} */ ([[true, 2, 11], [false, 0, 13]])) {
+  test('con la caché: una hora normal pide solo 1H USDT y EUR con limit=3 (23 subpeticiones); al cerrar la 4H, también la 4H', async () => {
+    const db = crearD1()
+    const escenario = crearEscenario()
+    const env = { ...entorno(db, 'BTC,ETH,SOL,BNB,XRP'), GROQ_API_KEY: 'g', GEMINI_API_KEY: 'k' }
+    const funding = Object.fromEntries(['BTC', 'ETH', 'SOL', 'BNB', 'XRP'].map((s) => [`${s}-USDT-SWAP`, '0.0001']))
+    /** @param {number} k */
+    const hora = async (k) => {
+      const fetch = fetchEscenario(escenario, ahoraDe(k), { funding })
+      const r = await ejecutarMercado({ esperar: sinEspera, env, fetch, ahora: ahoraDe(k) })
+      assert.deepEqual(r.ejecucion.fallos.filter((f) => f.startsWith('velas')), [])
+      return fetch.llamadas.map((l) => l.url)
+    }
+    assert.equal((await hora(0)).length, 38)
+    const h1 = await hora(1)
+    const velas1 = h1.filter((u) => u.includes('/market/candles'))
+    assert.equal(velas1.length, 10)
+    assert.ok(velas1.every((u) => u.endsWith('&bar=1H&limit=3')), velas1.join(' '))
+    assert.equal(h1.filter((u) => u.includes('funding-rate')).length, 0, 'el funding sigue en la caché')
+    assert.equal(h1.length, 10 + 10 + 1 + 2)
+    const velas4 = (await hora(4)).filter((u) => u.includes('/market/candles'))
+    assert.equal(velas4.filter((u) => u.endsWith('&bar=4H&limit=3')).length, 5)
+    assert.equal(velas4.length, 15)
+    const detalle = JSON.parse(await db.prepare('SELECT detalle_json FROM ejecuciones ORDER BY id DESC').first('detalle_json'))
+    assert.equal(detalle.subpeticiones, 15 + 10 + 1 + 2)
+  })
+
+  test('OKX limitando las velas USDT de BTC: Bybit las sirve, BTC no queda SIN_DATOS y la fuente queda anotada (sin entrar en la caché)', async () => {
+    const db = crearD1()
+    const escenario = crearEscenario()
+    const ahora = ahoraDe(0)
+    const fetch = fetchEscenario(escenario, ahora, { limitado: (url) => url.includes('candles?instId=BTC-USDT') })
+    const r = await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch, ahora })
+    assert.deepEqual(r.senales.map((s) => s.veredicto), ['COMPRAR', 'COMPRAR'])
+    const detalle = JSON.parse(await db.prepare('SELECT detalle_json FROM ejecuciones').first('detalle_json'))
+    assert.deepEqual(detalle.velasBybit, ['BTC-USDT 1h', 'BTC-USDT 4h', 'BTC-USDT 1d'])
+    assert.ok(detalle.fallos.includes('velas BTC-USDT 1h: HTTP 429 (código 50011)'))
+    const bybit = fetch.llamadas.filter((l) => l.url.startsWith('https://api.bybit.com/'))
+    assert.equal(bybit.length, 3)
+    assert.ok(bybit.every((l) => l.url.endsWith('&limit=300')))
+    const claves = await filas(db, 'SELECT instrumento, intervalo FROM cache_velas ORDER BY instrumento, intervalo')
+    assert.deepEqual(claves.map((c) => `${c.instrumento} ${c.intervalo}`), ['BTC-EUR 1h', 'ETH-EUR 1h', 'ETH-USDT 1d', 'ETH-USDT 1h', 'ETH-USDT 4h'])
+    // Igual que con OKX: la misma señal que una ejecución sin límite.
+    const normal = await ejecutarMercado({ esperar: sinEspera, env: entorno(crearD1()), fetch: fetchEscenario(escenario, ahora), ahora })
+    assert.deepEqual(r.senales[0].componentes, normal.senales[0].componentes)
+  })
+
+  test('funding en caché: se pide como mucho cada 8 h; si entonces falla, vale el guardado (< 24 h) y se anota', async () => {
+    const db = crearD1()
+    const escenario = crearEscenario()
+    await crearSimulacion(db, { capitalInicial: 10_000, version: 'v1', ahora: 0 })
+    const funding = { 'BTC-USDT-SWAP': '0.0006' }
+    for (let k = 0; k <= 8; k++) {
+      const fetch = fetchEscenario(escenario, ahoraDe(k), { funding: k < 8 ? funding : null })
+      const r = await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch, ahora: ahoraDe(k) })
+      const pedidas = fetch.llamadas.filter((l) => l.url.includes('/public/funding-rate')).map((l) => new URL(l.url).searchParams.get('instId'))
+      // ETH nunca tiene funding en este escenario: se reintenta cada hora.
+      assert.deepEqual(pedidas, k === 0 || k === 8 ? ['BTC-USDT-SWAP', 'ETH-USDT-SWAP'] : ['ETH-USDT-SWAP'], `hora ${k}`)
+      const motivo = await db.prepare("SELECT motivo FROM decisiones WHERE simbolo = 'BTC' AND vela_1h = ?").bind(velaDeDecision(ahoraDe(k))).first('motivo')
+      assert.equal(motivo, 'contradiccion_tecnico_derivados', `hora ${k}: el funding guardado sigue contando`)
+      if (k === 8) assert.ok(r.ejecucion.fallos.includes('derivados funding BTC: HTTP 503'))
+    }
+    assert.equal(await db.prepare("SELECT actualizado_en FROM cache_funding WHERE simbolo = 'BTC'").first('actualizado_en'), ahoraDe(0))
+  })
+
+  test('si no se puede escribir la caché, la ejecución sigue ok y lo anota', async () => {
+    const base = crearD1()
+    const db = {
+      prepare: (/** @type {string} */ sql) => base.prepare(sql),
+      batch: async (/** @type {any[]} */ sentencias) => {
+        if (sentencias.some((s) => s.sql.includes('INSERT INTO cache_velas'))) throw new Error('D1_ERROR: simulado')
+        return base.batch(sentencias)
+      },
+    }
+    const ahora = ahoraDe(0)
+    const r = await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(crearEscenario(), ahora), ahora })
+    assert.equal(r.ejecucion.ok, true)
+    assert.ok(r.ejecucion.fallos.includes('caché: D1_ERROR: simulado'))
+    assert.deepEqual(r.senales.map((s) => s.veredicto), ['COMPRAR', 'COMPRAR'])
+  })
+
+  test('OKX limitando (429/50011) en todo y Bybit caído: reintentos y respaldo llenan el hueco hasta 49 subpeticiones (≤ 50), SIN_DATOS y ejecución ok', async () => {
+    for (const [claves, llm, reintentos, bybit] of /** @type {const} */ ([[true, 2, 6, 5], [false, 0, 7, 6]])) {
       const db = crearD1()
       const ahora = ahoraDe(0)
-      const fetch = fetchEscenario(crearEscenario(), ahora, { limitado: true })
+      const fetch = fetchEscenario(crearEscenario(), ahora, { limitado: true, bybitCaido: true })
       const env = { ...entorno(db, 'BTC,ETH,SOL,BNB,XRP'), ...(claves ? { GROQ_API_KEY: 'g', GEMINI_API_KEY: 'k' } : {}) }
       const r = await ejecutarMercado({ esperar: sinEspera, env, fetch, ahora })
       assert.equal(r.ejecucion.ok, true)
-      // 35 a OKX + reintentos + F&G + LLM externos configurados + 1 de margen = 50.
-      assert.equal(fetch.llamadas.length, 20 + 15 + reintentos + 1 + llm)
+      // 35 a OKX + reintentos + Bybit + F&G + LLM externos configurados + 1 de margen = 50.
+      assert.equal(fetch.llamadas.length, 20 + 15 + reintentos + bybit + 1 + llm)
       assert.equal(fetch.llamadas.length, 49)
+      assert.equal(fetch.llamadas.filter((l) => l.url.startsWith('https://api.bybit.com/')).length, bybit)
       assert.ok(r.senales.every((s) => s.veredicto === 'SIN_DATOS'))
       const detalle = JSON.parse(await db.prepare('SELECT detalle_json FROM ejecuciones').first('detalle_json'))
       assert.equal(detalle.reintentosOkx, reintentos)
+      assert.equal(detalle.subpeticiones, 49)
     }
   })
 })

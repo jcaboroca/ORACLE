@@ -385,7 +385,8 @@ describe('rutas con PIN', () => {
     assert.deepEqual(respuestas.map((r) => r.estado).sort(), [200, 429, 429, 429, 429])
     for (const r of respuestas.filter((x) => x.estado === 429)) assert.equal(r.cuerpo.hasta, ahora + ESPERA_ANALIZAR_MS)
     assert.equal(await db.prepare("SELECT COUNT(*) AS n FROM ejecuciones WHERE tipo = 'manual'").first('n'), 1)
-    assert.equal(fetch.llamadas.filter((l) => l.url.includes('/market/candles')).length, 2 * 4, 'un solo análisis descargó velas')
+    // Las velas ya están al día en la caché (conDatos); el long/short se pide en cada análisis, una vez por moneda.
+    assert.equal(fetch.llamadas.filter((l) => l.url.includes('long-short')).length, 2, 'un solo análisis descargó datos')
   })
 })
 

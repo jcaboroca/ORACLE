@@ -85,9 +85,10 @@ mismo código se ejecuta en el Worker, en el backtest y en los tests.
 
 | Fuente | Endpoint | Clave | Uso |
 |---|---|---|---|
-| Velas USDT (indicadores) | OKX `www.okx.com/api/v5/market/candles?instId={SYM}-USDT`, `bar` = `1H`/`4H`/`1Dutc`, `limit=300` (el máximo de OKX: 299 cerradas + la vela en curso, como la ventana `VENTANA` del backtest) | No | Señal |
-| Velas EUR (ejecución) | ídem `{SYM}-EUR` `1H`, `limit=48` (47 cerradas: cambio 24 h y ~2 días de stops pendientes) | No | Precios del bot, stops, valoración |
-| Funding | OKX `/api/v5/public/funding-rate?instId={SYM}-USDT-SWAP` (`fundingRate` del periodo en curso, fracción por 8 h) | No | Derivados |
+| Velas USDT (indicadores) | OKX `www.okx.com/api/v5/market/candles?instId={SYM}-USDT`, `bar` = `1H`/`4H`/`1Dutc`: `limit=300` sin caché (el máximo de OKX: 299 cerradas + la vela en curso, como la ventana `VENTANA` del backtest) y `limit=3` con la caché de D1 al día (ver abajo) | No | Señal |
+| Velas USDT (respaldo) | Bybit spot `api.bybit.com/v5/market/kline?category=spot&symbol={SYM}USDT&interval=60\|240\|D` (filas `[inicio,o,h,l,c,vol,turnover]`, la más reciente primero; día UTC), mismo `limit` que se pedía a OKX. Solo si OKX sigue fallando tras los reintentos | No | Señal |
+| Velas EUR (ejecución) | ídem `{SYM}-EUR` `1H`, `limit=48` sin caché (47 cerradas: cambio 24 h y ~2 días de stops pendientes), `limit=3` con caché. Solo OKX: Bybit no tiene BNB-EUR | No | Precios del bot, stops, valoración |
+| Funding | OKX `/api/v5/public/funding-rate?instId={SYM}-USDT-SWAP` (`fundingRate` del periodo en curso, fracción por 8 h), guardado en D1 y pedido como mucho cada 8 h | No | Derivados |
 | Long/short | OKX `/api/v5/rubik/stat/contracts/long-short-account-ratio-contract?instId={SYM}-USDT-SWAP&period=1H&limit=1` (cuentas) | No | Derivados |
 | Open interest | OKX `/api/v5/rubik/stat/contracts/open-interest-history?instId={SYM}-USDT-SWAP&period=1H&limit=25` (en monedas, `oiCcy`; cambio = último / el de 24 h antes − 1) | No | Derivados |
 | Fear & Greed | `api.alternative.me/fng/` | No | Ánimo |
@@ -115,9 +116,32 @@ Binance, y los gráficos de la PWA piden las velas a Binance desde el navegador.
   sin aciertos hasta 8 s; la limitada se reintenta al acabar, sin perder su turno: **una vez** los
   derivados (opcionales) y hasta **dos** las velas (sin ellas la moneda queda `SIN_DATOS`; con un solo
   reintento alguna serie seguía cayendo en producción). Los reintentos por ejecución son los que caben
-  en las 50 subpeticiones tras las fijas, con 1 de margen: 13 sin claves de Groq/Gemini, 11 con ambas (§9).
+  en las 50 subpeticiones tras las fijas, con 1 de margen (§9); comparten ese hueco con las series enteras
+  por un hueco de la caché y con Bybit, que tiene reservada la mitad (como mucho una por serie USDT pedida).
+- **Caché de velas en D1 (`cache_velas`, migración 0005).** Una vela cerrada no cambia: se guardan
+  las últimas cerradas de cada serie de OKX (300 USDT, 47 EUR; una fila por serie con
+  `[[inicio,o,h,l,c,v],…]` y `actualizado_en`). Cada ejecución pide solo lo que puede haber cambiado:
+  1H USDT y EUR cada hora con `limit=3` (la última cerrada, la anterior y la vela en curso), `4H` solo
+  cuando ha cerrado una 4H nueva y `1Dutc` solo al cerrar el día UTC (también con `limit=3`). Sin caché,
+  con caché ilegible o corta, o con un hueco de 3 o más velas, la serie entera (300 / 48). Lo nuevo se une
+  a la caché (manda lo recién descargado si repite `inicio`; se descarta la vela abierta; se guardan las
+  300 / 47 últimas cerradas) y se reescribe en la misma ejecución, en un lote. Si lo descargado no
+  empalma con la caché, se pide la serie entera (una subpetición del hueco de reintentos). La estrategia
+  recibe exactamente lo mismo que pidiendo la serie entera: las 299 últimas USDT cerradas y las 47 EUR
+  (comprobado hora a hora durante 4 días con huecos en `worker/test/velas-cache.test.js`, y el test de
+  paridad con el backtest sigue igual). Típico: 10 peticiones de velas de 3 filas por hora en vez de 20 de
+  300/48.
+- **Respaldo de Bybit (solo USDT).** Si una serie USDT sigue fallando en OKX tras sus reintentos, se pide
+  a Bybit spot con el mismo `limit` y se une a la caché para esa ejecución, sin guardarla (la caché es
+  solo de OKX). Se valida igual de estricto (`retCode = 0`, símbolo, filas alineadas a UTC, OHLC coherente,
+  orden). La ejecución anota la fuente en `detalle_json.velasBybit` (p. ej. `["BTC-USDT 1h"]`). Las EUR no
+  tienen respaldo: con la EUR caída el bot ya registra `datos_desactualizados`.
+- **Orden.** Primero las velas (imprescindibles) y Fear & Greed; después el respaldo de Bybit de las que
+  fallen; los derivados (opcionales) al final, así sus reintentos nunca van antes que las velas.
 - Los derivados son opcionales: si una petición falla, esa subpuntuación queda ausente (§6.2) y
-  la ejecución sigue.
+  la ejecución sigue. El funding se guarda en D1 (`cache_funding`) y se refresca si falta o tiene 8 h o
+  más; si al refrescarlo falla, vale el guardado mientras tenga menos de 24 h. Long/short y open interest
+  se piden cada hora, con un único reintento.
 - El open interest se toma en monedas (`oiCcy`) y no en USD, para que el cambio de precio no se
   cuele en el del open interest (la regla de §6.2 los compara por separado).
 
@@ -153,13 +177,17 @@ invocación):
      validan igual de estrictos y lo irreparable pasa al siguiente recurso.
 
 ### Cron `3 * * * *` — mercado y bot
-1. Descarga velas USDT (1h/4h/1d), velas EUR 1h, derivados y Fear & Greed.
+1. Lee la caché de D1 y descarga lo que falta de las velas USDT (1h/4h/1d) y EUR 1h (Bybit de respaldo
+   para las USDT), luego los derivados, y Fear & Greed; reescribe la caché (§4).
 2. Para cada moneda, la estrategia de la simulación activa (`estrategia(simulacion.estrategia_version)`
    de `core/estrategias.js`; hoy `v1`) calcula la señal (§6) con titulares de las
    últimas 24 h leídos de D1.
 3. Una llamada al LLM redacta la explicación de cada señal a partir del desglose
-   estructurado (Workers AI en modo JSON, con un campo obligatorio por moneda). Si falla, plantilla de texto
-   (`motorExplicacion = 'plantilla'`).
+   estructurado (Workers AI en modo JSON, con un campo obligatorio por moneda). Las cifras le llegan ya
+   formateadas en español (`"+0,31"`, `"50 %"`, volatilidad `"0,96 %"`; componentes ausentes como
+   `"ausente"`) y el prompt pide 1-2 frases cortas, sin inventar datos y nunca más de 2 decimales. Una
+   explicación con algún número de más de 3 decimales (p. ej. «0.313897118», copiado en bruto) se rechaza
+   y esa moneda usa la plantilla. Si falla, plantilla de texto (`motorExplicacion = 'plantilla'`).
 4. Guarda la señal en `senales_actuales`.
 5. Ejecuta el bot (§7) para la simulación activa.
 6. Guarda instantánea de capital.
@@ -473,16 +501,17 @@ a partir de las filas de D1.
 | Cron triggers: 5/cuenta (1 usado por SolarMonitor) | 2 | queda en 3/5 |
 | Peticiones: 100.000/día por cuenta | 48 crons + ~300 PWA | < 0,5 % |
 | KV escrituras: 1.000/día por cuenta (usado por 4 proyectos) | **0**: ORACLE no usa KV | 0 % |
-| D1 escrituras: 100.000/día | ~5 decisiones + ~5 progreso + 1 capital + ~50 titulares/h ≈ 1.700/día; + ~4 filas por petición con PIN (reserva y liberación del intento) ≈ 1.200/día con ~300 peticiones | ~3 % |
+| D1 escrituras: 100.000/día | ~5 decisiones + ~5 progreso + 1 capital + ~50 titulares/h ≈ 1.700/día; caché de mercado ≈ 10-20 filas/h (una por serie que cambia, más el funding cada 8 h) ≈ 300/día; + ~4 filas por petición con PIN (reserva y liberación del intento) ≈ 1.200/día con ~300 peticiones | ~3 % |
 | D1 lecturas: 5 M/día | consultas indexadas y acotadas: ninguna ruta recorre una tabla entera ni ordena aparte (comprobado con `EXPLAIN QUERY PLAN` en los tests); `GET /api/bot` lee ~720 puntos horarios + ~2 filas por día de historia, no la curva ni las decisiones completas | < 1 % |
 | Workers AI: 10.000 neuronas/día por cuenta | `@cf/meta/llama-3.1-8b-instruct-fp8-fast` (4.119 neuronas/M de entrada, 34.868/M de salida). Medido con `usage.neurons` (2026-10-19): lote de 25 titulares ≈ 20 neuronas (~0,8 por titular), explicación de 5 señales ≈ 11. Noticias: ~160 titulares/día observados ≈ 150-250/día; tope de 80 titulares/h (4 lotes ≈ 64) ≈ 1.540/día. Explicaciones: 24 crons × 11 ≈ 260/día; análisis manual ≈ 11 cada uno (≤ 1 cada 5 min). Típico ≈ 550/día; peor caso de los crons ≈ 1.800/día. Solo un análisis manual cada 5 min durante todo el día (con PIN) añadiría ~3.200. Un 70B (`llama-3.3-70b-instruct-fp8-fast`) cuesta ~146 por lote de 25: no cabe | típico ~6 %, crons a tope ~18 % |
-| Subpeticiones: 50/invocación | noticias = 14 RSS + 3 Reddit + hasta 2 LLM externos (Groq, Gemini, solo con clave) por lote × 4 lotes = 17-25; mercado = 15 velas USDT + 5 EUR + 15 derivados (funding + 2 rubik por moneda) a OKX + 1 F&G + hasta 2 LLM (Groq, Gemini, solo con clave) = 36-38, más los reintentos por límite de ritmo que quepan dejando 1 de margen (11-13): como mucho 49 | bajo límite |
-| CPU: 10 ms/invocación | parsing ligero (regex para RSS, sin librerías XML); mercado: ~0,55 MB de JSON de velas de OKX (15 × 300 USDT, ~30 KB cada una, + 5 × 48 EUR) validado y convertido en una sola pasada, derivados de ~0,2-3 KB por petición; `[observability]` activo para ver la CPU real por invocación en Workers Logs. **Medido en producción (2026-10-19): `POST /api/analizar` 46 ms y cron de mercado 41 ms de CPU** (noticias, 28 ms), con resultado `ok`: por encima de los 10 ms nominales. En Node, en caliente, parsear las 20 series cuesta ~5-9 ms y `ejecutarHora` ~1-4 ms; en frío (isolate nuevo, como en cada cron) bastante más | por invocación: si Cloudflare llegara a cortar por CPU, solo falla esa ejecución de ORACLE; vigilar en Workers Logs (§13) |
+| Subpeticiones: 50/invocación | noticias = 14 RSS + 3 Reddit + hasta 2 LLM externos (Groq, Gemini, solo con clave) por lote × 4 lotes = 17-25. Mercado (5 monedas), fijas según la caché de D1: velas a OKX = 10 en una hora normal (1H USDT y EUR, `limit=3`), +5 al cerrar una 4H (cada 4 h), +5 al cerrar el día (00:03 UTC), 20 sin caché; derivados = 10 rubik + funding solo si toca (5 cada 8 h); + 1 F&G + hasta 2 LLM (Groq, Gemini, solo con clave). Fijas: **21** típico (producción, sin claves), 26-31 a las horas de 4H/funding, **38** como mucho (caché vacía y claves). El resto hasta 50, con 1 de margen, es el hueco de extras (11-28): reintentos de OKX, series enteras por un hueco de la caché y respaldo de Bybit (la mitad reservada para Bybit durante la fase de velas, como mucho una por serie USDT pedida; lo que no use pasa a los reintentos de los derivados). Total ≤ 49, contado en cada ejecución (`detalle_json.subpeticiones`) | bajo límite |
+| CPU: 10 ms/invocación | parsing ligero (regex para RSS, sin librerías XML); mercado: con la caché, 10 respuestas de velas de 3 filas por hora más la lectura de la caché de D1 (~0,25 MB de números ya convertidos, sin cadenas que pasar a `Number`) y la reescritura de las series que cambian (5 × 1H USDT + 5 × EUR); en Node, en caliente, ~1,7 ms frente a ~2,5 ms de parsear las 20 series de OKX (medido con datos de tamaño real). Sin caché: ~0,55 MB de JSON de velas de OKX (15 × 300 USDT, ~30 KB cada una, + 5 × 48 EUR) validado y convertido en una sola pasada, derivados de ~0,2-3 KB por petición; `[observability]` activo para ver la CPU real por invocación en Workers Logs. **Medido en producción (2026-10-19): `POST /api/analizar` 46 ms y cron de mercado 41 ms de CPU** (noticias, 28 ms), con resultado `ok`: por encima de los 10 ms nominales. En Node, en caliente, parsear las 20 series cuesta ~5-9 ms y `ejecutarHora` ~1-4 ms; en frío (isolate nuevo, como en cada cron) bastante más | por invocación: si Cloudflare llegara a cortar por CPU, solo falla esa ejecución de ORACLE; vigilar en Workers Logs (§13) |
 | Tiempo de reloj (no es CPU) | las 10 peticiones rubik van en serie con 450 ms entre ellas y el LLM tarda varios segundos: medido 24,6 s en `POST /api/analizar` y 18,9 s en el cron de mercado | sin límite de reloj en crons; lento pero aceptable en la petición manual |
 
 Salvaguardas: la PWA solo consulta al abrirse y cada 5 min mientras está visible; las
 velas del gráfico van del navegador a Binance directamente; PIN con bloqueo; sin reintentos
-en bucle (OKX: un reintento por petición limitada y 6 por ejecución como mucho). Todas las
+en bucle (OKX: hasta 2 reintentos por serie de velas y 1 por derivado, dentro del hueco de extras de la
+ejecución; Bybit, un intento por serie USDT y sin reintentos). Todas las
 fuentes leen o cancelan siempre el cuerpo de la respuesta, también en los errores (`fuentes/http.js`):
 un cuerpo sin consumir lo corta Workers («stalled HTTP response») y puede bloquear las demás. Si la CPU resultara insuficiente, se avisará antes de proponer el plan de pago.
 
@@ -625,6 +654,20 @@ CREATE TABLE pin_global (                 -- migración 0003: tope de fallos ent
   en_vuelo INTEGER NOT NULL DEFAULT 0,    -- migración 0004
   vuelo_hasta INTEGER
 );
+
+-- Migración 0005: caché de mercado (§4). Una fila por serie o moneda; no crece con la historia.
+CREATE TABLE cache_velas (
+  instrumento TEXT NOT NULL,              -- BTC-USDT, BTC-EUR…
+  intervalo TEXT NOT NULL,                -- 1h | 4h | 1d
+  velas_json TEXT NOT NULL,               -- [[inicio,o,h,l,c,v],…] cerradas, ascendentes (300 USDT / 47 EUR)
+  actualizado_en INTEGER NOT NULL,
+  PRIMARY KEY (instrumento, intervalo)
+);
+CREATE TABLE cache_funding (
+  simbolo TEXT PRIMARY KEY,
+  valor REAL NOT NULL,                    -- fundingRate (fracción por 8 h)
+  actualizado_en INTEGER NOT NULL         -- se refresca si tiene 8 h o más
+);
 ```
 
 **Reconstrucción del estado del bot.** El `Estado` de `core/bot.js` se reconstruye desde D1
@@ -701,8 +744,15 @@ service worker que cachea solo la estructura de la app (los datos siempre en red
 
 ## 13. Errores
 
-- Fuente de velas caída para una moneda → `SIN_DATOS`, el bot no abre; si después llegan
+- OKX limitando (429/50011) desde la IP compartida de Cloudflare → la caché de D1 evita pedir lo que
+  no cambia (4H y 1D casi nunca se piden); las velas van primero y se reintentan (2 veces) dentro del
+  hueco de extras; una serie USDT que siga fallando se pide a Bybit (anotado en `velasBybit`). Los
+  derivados van al final y, si siguen limitados tras su único reintento, quedan ausentes.
+- Fuente de velas caída para una moneda (OKX y Bybit) → `SIN_DATOS`, el bot no abre; si después llegan
   velas, los stops pendientes se comprueban.
+- Caché de mercado ilegible o error de D1 al leerla → se pide todo entero (como sin caché); error al
+  escribirla → se anota `caché: …` y la ejecución sigue (la siguiente vuelve a pedir lo que falte).
+- Explicación del LLM con cifras en bruto (más de 3 decimales) → plantilla para esa moneda.
 - Derivados, noticias o Fear & Greed caídos → componente ausente, pesos renormalizados,
   marcado en el desglose.
 - LLM caído → léxico local para puntuar; plantilla para explicar.

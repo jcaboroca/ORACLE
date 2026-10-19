@@ -58,3 +58,16 @@ export function aRespuestaOkx(velas, ahora) {
   ]).reverse()
   return { code: '0', msg: '', data }
 }
+
+/**
+ * Velas → respuesta de /v5/market/kline de Bybit spot (textos, la más reciente primero, 7 campos).
+ * @param {import('../../core/velas.js').Vela[]} velas
+ * @param {string} simbolo p. ej. BTCUSDT
+ */
+export function aRespuestaBybit(velas, simbolo) {
+  const list = velas.map((v) => [
+    String(v.inicio), String(v.apertura), String(v.maximo), String(v.minimo), String(v.cierre), String(v.volumen),
+    String(v.volumen * v.cierre),
+  ]).reverse()
+  return { retCode: 0, retMsg: 'OK', result: { category: 'spot', symbol: simbolo, list }, retExtInfo: {}, time: 0 }
+}

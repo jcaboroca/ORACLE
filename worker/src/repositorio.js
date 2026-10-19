@@ -331,6 +331,50 @@ export async function purgar(db, ahora) {
   ])
 }
 
+// ── Caché de mercado (spec §4 y §9) ──────────────────────────────────────────
+
+/** @param {number} n */
+const marcas = (n) => Array.from({ length: n }, () => '?').join(', ')
+
+/**
+ * Velas y funding guardados de las monedas configuradas, en una llamada (lote de 2 lecturas por clave primaria).
+ * @param {D1} db
+ * @param {string[]} monedas
+ * @returns {Promise<{ velas: Record<string, string>, funding: Record<string, { valor: number, actualizadoEn: number }> }>}
+ *   velas: 'BTC-USDT 1h' → velas_json
+ */
+export async function leerCacheMercado(db, monedas) {
+  const instrumentos = monedas.flatMap((s) => [`${s}-USDT`, `${s}-EUR`])
+  const [velas, funding] = await db.batch([
+    db.prepare(`SELECT instrumento, intervalo, velas_json FROM cache_velas WHERE instrumento IN (${marcas(instrumentos.length)})`)
+      .bind(...instrumentos),
+    db.prepare(`SELECT simbolo, valor, actualizado_en FROM cache_funding WHERE simbolo IN (${marcas(monedas.length)})`).bind(...monedas),
+  ])
+  return {
+    velas: Object.fromEntries(velas.results.map((f) => [`${f.instrumento} ${f.intervalo}`, f.velas_json])),
+    funding: Object.fromEntries(funding.results.map((f) => [f.simbolo, { valor: f.valor, actualizadoEn: f.actualizado_en }])),
+  }
+}
+
+/**
+ * Reescribe las series y el funding que han cambiado, en un lote (nada si no hay cambios).
+ * @param {D1} db
+ * @param {{ velas: { instrumento: string, intervalo: string, json: string }[], funding: Record<string, number>, ahora: number }} datos
+ */
+export async function guardarCacheMercado(db, { velas, funding, ahora }) {
+  const sentencias = [
+    ...velas.map((v) => db.prepare(
+      `INSERT INTO cache_velas (instrumento, intervalo, velas_json, actualizado_en) VALUES (?, ?, ?, ?)
+       ON CONFLICT (instrumento, intervalo) DO UPDATE SET velas_json = excluded.velas_json, actualizado_en = excluded.actualizado_en`,
+    ).bind(v.instrumento, v.intervalo, v.json, ahora)),
+    ...Object.entries(funding).map(([simbolo, valor]) => db.prepare(
+      `INSERT INTO cache_funding (simbolo, valor, actualizado_en) VALUES (?, ?, ?)
+       ON CONFLICT (simbolo) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en`,
+    ).bind(simbolo, valor, ahora)),
+  ]
+  if (sentencias.length > 0) await db.batch(sentencias)
+}
+
 // ── Señales actuales ─────────────────────────────────────────────────────────
 
 /**
