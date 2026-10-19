@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>ORACLE</title>
+  <!-- Fondo opaco (iOS no admite transparencia en el icono de inicio) -->
+  <rect x="0" y="0" width="512" height="512" fill="#0b0f17"/>
+  <!-- Bola de cristal: aro turquesa y cristal oscuro -->
+  <circle cx="256" cy="232" r="168" fill="#2dd4bf"/>
+  <circle cx="256" cy="232" r="148" fill="#10232e"/>
+  <!-- Reflejo -->
+  <circle cx="190" cy="150" r="20" fill="#9ff3e6"/>
+  <!-- Tres velas al alza dentro de la bola -->
+  <rect x="196" y="236" width="8" height="104" fill="#2dd4bf"/>
+  <rect x="180" y="254" width="40" height="70" fill="#2dd4bf"/>
+  <rect x="252" y="196" width="8" height="124" fill="#2dd4bf"/>
+  <rect x="236" y="214" width="40" height="88" fill="#2dd4bf"/>
+  <rect x="308" y="140" width="8" height="150" fill="#f2c14e"/>
+  <rect x="292" y="160" width="40" height="112" fill="#f2c14e"/>
+  <!-- Peana dorada -->
+  <polygon points="168,392 344,392 384,452 128,452" fill="#f2c14e"/>
+  <rect x="112" y="452" width="288" height="24" fill="#f2c14e"/>
+</svg>

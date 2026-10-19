@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.js\" \"test/pwa/*.test.js\" \"worker/test/*.test.js\"",
-    "backtest": "node scripts/backtest.mjs"
+    "backtest": "node scripts/backtest.mjs",
+    "iconos": "node scripts/iconos.mjs"
   }
 }
