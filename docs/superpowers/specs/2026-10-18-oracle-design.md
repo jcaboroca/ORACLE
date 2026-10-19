@@ -134,9 +134,23 @@ invocación):
 1. Descarga RSS y Reddit en paralelo. Un feed que falle se ignora y se registra.
 2. Normaliza, deduplica por hash de título normalizado, descarta > 48 h.
 3. Inserta en `titulares` solo los nuevos.
-4. Los titulares sin puntuar se envían al LLM en **un solo lote**: devuelve por titular
-   `puntuacion ∈ [-1,1]` y `monedas` afectadas (o `MERCADO`). Respuesta JSON validada.
-   Groq → si falla, Gemini → si falla, `core/lexico.js`. Se guarda el motor usado.
+4. Los titulares sin puntuar de las últimas 24 h (hasta 80 por ejecución, los más recientes) se
+   envían al LLM en **lotes de 25** (una llamada por lote, en serie): devuelve por titular
+   `puntuacion ∈ [-1,1]` y `monedas` afectadas (o `MERCADO`). Respuesta JSON validada elemento a elemento.
+   Cada lote recorre la cascada por su cuenta: Workers AI → si falla, Groq → si falla, Gemini → si falla,
+   `core/lexico.js`. Se guarda el motor usado; ningún titular de las últimas 24 h queda sin puntuar.
+   Los de 24-48 h se guardan solo para deduplicar y se quedan **sin puntuar a propósito**
+   (`puntuacion` y `motor` NULL): la estrategia solo lee las últimas 24 h.
+   - Workers AI va en **modo JSON** (`response_format: json_schema`, con `n` acotado al lote y `monedas`
+     limitadas a la lista + `MERCADO`); `response` llega entonces como objeto. Modelo
+     `@cf/meta/llama-3.1-8b-instruct-fp8-fast` (admite modo JSON). Si el modelo configurado no admite
+     esquema (error 5025) se repite una vez sin él.
+   - Diagnóstico (2026-10-19, salida real grabada en `worker/test/fixtures/`): con
+     `llama-3.1-8b-instruct-fp8` sin modo JSON y 80 titulares en una llamada, 65 de 80 elementos venían
+     con `"monedas:[]` (comilla sin cerrar) y sin `}` final, tardaba 105 s y todo caía al léxico
+     («llm cf: respuesta no válida»). Por eso, además, si el JSON completo no es válido se rescata cada
+     objeto `{…}` plano por separado (reparando esa comilla, `+0.4` y comas finales); los valores se
+     validan igual de estrictos y lo irreparable pasa al siguiente recurso.
 
 ### Cron `3 * * * *` — mercado y bot
 1. Descarga velas USDT (1h/4h/1d), velas EUR 1h, derivados y Fear & Greed.
@@ -144,7 +158,8 @@ invocación):
    de `core/estrategias.js`; hoy `v1`) calcula la señal (§6) con titulares de las
    últimas 24 h leídos de D1.
 3. Una llamada al LLM redacta la explicación de cada señal a partir del desglose
-   estructurado. Si falla, plantilla de texto.
+   estructurado (Workers AI en modo JSON, con un campo obligatorio por moneda). Si falla, plantilla de texto
+   (`motorExplicacion = 'plantilla'`).
 4. Guarda la señal en `senales_actuales`.
 5. Ejecuta el bot (§7) para la simulación activa.
 6. Guarda instantánea de capital.
@@ -460,7 +475,8 @@ a partir de las filas de D1.
 | KV escrituras: 1.000/día por cuenta (usado por 4 proyectos) | **0**: ORACLE no usa KV | 0 % |
 | D1 escrituras: 100.000/día | ~5 decisiones + ~5 progreso + 1 capital + ~50 titulares/h ≈ 1.700/día; + ~4 filas por petición con PIN (reserva y liberación del intento) ≈ 1.200/día con ~300 peticiones | ~3 % |
 | D1 lecturas: 5 M/día | consultas indexadas y acotadas: ninguna ruta recorre una tabla entera ni ordena aparte (comprobado con `EXPLAIN QUERY PLAN` en los tests); `GET /api/bot` lee ~720 puntos horarios + ~2 filas por día de historia, no la curva ni las decisiones completas | < 1 % |
-| Subpeticiones: 50/invocación | noticias ≈ 19; mercado = 15 velas USDT + 5 EUR + 15 derivados (funding + 2 rubik por moneda) a OKX + 1 F&G + hasta 2 LLM (Groq, Gemini, solo con clave) = 36-38, más los reintentos por límite de ritmo que quepan dejando 1 de margen (11-13): como mucho 49 | bajo límite |
+| Workers AI: 10.000 neuronas/día por cuenta | `@cf/meta/llama-3.1-8b-instruct-fp8-fast` (4.119 neuronas/M de entrada, 34.868/M de salida). Medido con `usage.neurons` (2026-10-19): lote de 25 titulares ≈ 20 neuronas (~0,8 por titular), explicación de 5 señales ≈ 11. Noticias: ~160 titulares/día observados ≈ 150-250/día; tope de 80 titulares/h (4 lotes ≈ 64) ≈ 1.540/día. Explicaciones: 24 crons × 11 ≈ 260/día; análisis manual ≈ 11 cada uno (≤ 1 cada 5 min). Típico ≈ 550/día; peor caso de los crons ≈ 1.800/día. Solo un análisis manual cada 5 min durante todo el día (con PIN) añadiría ~3.200. Un 70B (`llama-3.3-70b-instruct-fp8-fast`) cuesta ~146 por lote de 25: no cabe | típico ~6 %, crons a tope ~18 % |
+| Subpeticiones: 50/invocación | noticias = 14 RSS + 3 Reddit + hasta 2 LLM externos (Groq, Gemini, solo con clave) por lote × 4 lotes = 17-25; mercado = 15 velas USDT + 5 EUR + 15 derivados (funding + 2 rubik por moneda) a OKX + 1 F&G + hasta 2 LLM (Groq, Gemini, solo con clave) = 36-38, más los reintentos por límite de ritmo que quepan dejando 1 de margen (11-13): como mucho 49 | bajo límite |
 | CPU: 10 ms/invocación | parsing ligero (regex para RSS, sin librerías XML); mercado: ~0,55 MB de JSON de velas de OKX (15 × 300 USDT, ~30 KB cada una, + 5 × 48 EUR) validado y convertido en una sola pasada, derivados de ~0,2-3 KB por petición; `[observability]` activo para ver la CPU real por invocación en Workers Logs. **Medido en producción (2026-10-19): `POST /api/analizar` 46 ms y cron de mercado 41 ms de CPU** (noticias, 28 ms), con resultado `ok`: por encima de los 10 ms nominales. En Node, en caliente, parsear las 20 series cuesta ~5-9 ms y `ejecutarHora` ~1-4 ms; en frío (isolate nuevo, como en cada cron) bastante más | por invocación: si Cloudflare llegara a cortar por CPU, solo falla esa ejecución de ORACLE; vigilar en Workers Logs (§13) |
 | Tiempo de reloj (no es CPU) | las 10 peticiones rubik van en serie con 450 ms entre ellas y el LLM tarda varios segundos: medido 24,6 s en `POST /api/analizar` y 18,9 s en el cron de mercado | sin límite de reloj en crons; lento pero aceptable en la petición manual |
 
@@ -579,7 +595,7 @@ CREATE TABLE titulares (
   publicado_en INTEGER NOT NULL,
   monedas_json TEXT,
   puntuacion REAL,
-  motor TEXT                              -- groq | gemini | lexico
+  motor TEXT                              -- cf | groq | gemini | lexico; NULL = 24-48 h, sin puntuar a propósito (§5)
 );
 CREATE INDEX titulares_fecha ON titulares(publicado_en);
 

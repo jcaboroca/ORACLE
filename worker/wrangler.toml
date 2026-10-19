@@ -20,13 +20,14 @@ database_name = "oracle"
 database_id = "ed510fcd-da2f-4fbe-96a5-cd63267352f9"
 migrations_dir = "migrations"
 
-# Workers AI: primer LLM de la cascada (cuota gratuita de 10.000 neuronas/día por cuenta).
+# Workers AI: primer LLM de la cascada (cuota gratuita de 10.000 neuronas/día por cuenta). El modelo debe
+# admitir el modo JSON con esquema (el -fp8 sin -fast no lo admite y rompía el JSON; spec §5 y §9).
 [ai]
 binding = "AI"
 
 [vars]
 MONEDAS = "BTC,ETH,SOL,BNB,XRP"
-LLM_MODELO_CF = "@cf/meta/llama-3.1-8b-instruct-fp8"
+LLM_MODELO_CF = "@cf/meta/llama-3.1-8b-instruct-fp8-fast"
 LLM_MODELO_GROQ = "llama-3.3-70b-versatile"
 LLM_MODELO_GEMINI = "gemini-flash-latest"
 ORIGENES = "https://jcaboroca.github.io,http://localhost:8080"

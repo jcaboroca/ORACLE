@@ -1,0 +1,205 @@
+{
+ "id": "chatcmpl-002b2769-74aa-40c3-b78d-68a4ad150b1f",
+ "object": "chat.completion",
+ "created": 1792374164,
+ "model": "@cf/meta/llama-3.1-8b-fast-v2",
+ "choices": [
+  {
+   "index": 0,
+   "message": {
+    "role": "assistant",
+    "content": "{\"titulares\":[{\"n\":1,\"puntuacion\":-0.2,\"monedas\":[\"XRP\"]},{\"n\":2,\"puntuacion\":0.8,\"monedas\":[\"BTC\",\"ETH\"]},{\"n\":3,\"puntuacion\":-0.6,\"monedas\":[\"BTC\"]},{\"n\":4,\"puntuacion\":-0.4,\"monedas\":[]},{\"n\":5,\"puntuacion\":0,\"monedas\":[]},{\"n\":6,\"puntuacion\":0.6,\"monedas\":[\"BTC\",\"SOL\"]},{\"n\":7,\"puntuacion\":-0.8,\"monedas\":[\"BTC\",\"ETH\"]},{\"n\":8,\"puntuacion\":0.4,\"monedas\":[\"SOL\"]},{\"n\":9,\"puntuacion\":0.2,\"monedas\":[]},{\"n\":10,\"puntuacion\":-0.6,\"monedas\":[\"BTC\"]},{\"n\":11,\"puntuacion\":0.8,\"monedas\":[\"ETH\"]},{\"n\":12,\"puntuacion\":-0.2,\"monedas\":[]},{\"n\":13,\"puntuacion\":0,\"monedas\":[]},{\"n\":14,\"puntuacion\":0.4,\"monedas\":[\"BTC\"]},{\"n\":15,\"puntuacion\":-0.4,\"monedas\":[]},{\"n\":16,\"puntuacion\":0,\"monedas\":[]},{\"n\":17,\"puntuacion\":-0.6,\"monedas\":[]},{\"n\":18,\"puntuacion\":-0.2,\"monedas\":[]},{\"n\":19,\"puntuacion\":-0.8,\"monedas\":[\"BTC\"]},{\"n\":20,\"puntuacion\":0.6,\"monedas\":[\"BTC\",\"ETH\"]},{\"n\":21,\"puntuacion\":0.8,\"monedas\":[\"XRP\"]},{\"n\":22,\"puntuacion\":0,\"monedas\":[]},{\"n\":23,\"puntuacion\":-0.8,\"monedas\":[]},{\"n\":24,\"puntuacion\":0.8,\"monedas\":[\"BTC\",\"ETH\"]},{\"n\":25,\"puntuacion\":-0.4,\"monedas\":[\"BTC\",\"ETH\"]}]}",
+    "refusal": null,
+    "annotations": null,
+    "audio": null,
+    "function_call": null,
+    "reasoning": null
+   },
+   "logprobs": null,
+   "finish_reason": "stop",
+   "stop_reason": null,
+   "token_ids": null,
+   "routed_experts": null
+  }
+ ],
+ "service_tier": null,
+ "usage": {
+  "prompt_tokens": 787,
+  "completion_tokens": 478,
+  "total_tokens": 1265,
+  "prompt_tokens_details": {
+   "cached_tokens": 0
+  },
+  "neurons": 19.90812873840332
+ },
+ "prompt_logprobs": null,
+ "prompt_token_ids": null,
+ "prompt_text": null,
+ "kv_transfer_params": null,
+ "ec_transfer_params": null,
+ "metrics": null,
+ "response": {
+  "titulares": [
+   {
+    "n": 1,
+    "puntuacion": -0.2,
+    "monedas": [
+     "XRP"
+    ]
+   },
+   {
+    "n": 2,
+    "puntuacion": 0.8,
+    "monedas": [
+     "BTC",
+     "ETH"
+    ]
+   },
+   {
+    "n": 3,
+    "puntuacion": -0.6,
+    "monedas": [
+     "BTC"
+    ]
+   },
+   {
+    "n": 4,
+    "puntuacion": -0.4,
+    "monedas": []
+   },
+   {
+    "n": 5,
+    "puntuacion": 0,
+    "monedas": []
+   },
+   {
+    "n": 6,
+    "puntuacion": 0.6,
+    "monedas": [
+     "BTC",
+     "SOL"
+    ]
+   },
+   {
+    "n": 7,
+    "puntuacion": -0.8,
+    "monedas": [
+     "BTC",
+     "ETH"
+    ]
+   },
+   {
+    "n": 8,
+    "puntuacion": 0.4,
+    "monedas": [
+     "SOL"
+    ]
+   },
+   {
+    "n": 9,
+    "puntuacion": 0.2,
+    "monedas": []
+   },
+   {
+    "n": 10,
+    "puntuacion": -0.6,
+    "monedas": [
+     "BTC"
+    ]
+   },
+   {
+    "n": 11,
+    "puntuacion": 0.8,
+    "monedas": [
+     "ETH"
+    ]
+   },
+   {
+    "n": 12,
+    "puntuacion": -0.2,
+    "monedas": []
+   },
+   {
+    "n": 13,
+    "puntuacion": 0,
+    "monedas": []
+   },
+   {
+    "n": 14,
+    "puntuacion": 0.4,
+    "monedas": [
+     "BTC"
+    ]
+   },
+   {
+    "n": 15,
+    "puntuacion": -0.4,
+    "monedas": []
+   },
+   {
+    "n": 16,
+    "puntuacion": 0,
+    "monedas": []
+   },
+   {
+    "n": 17,
+    "puntuacion": -0.6,
+    "monedas": []
+   },
+   {
+    "n": 18,
+    "puntuacion": -0.2,
+    "monedas": []
+   },
+   {
+    "n": 19,
+    "puntuacion": -0.8,
+    "monedas": [
+     "BTC"
+    ]
+   },
+   {
+    "n": 20,
+    "puntuacion": 0.6,
+    "monedas": [
+     "BTC",
+     "ETH"
+    ]
+   },
+   {
+    "n": 21,
+    "puntuacion": 0.8,
+    "monedas": [
+     "XRP"
+    ]
+   },
+   {
+    "n": 22,
+    "puntuacion": 0,
+    "monedas": []
+   },
+   {
+    "n": 23,
+    "puntuacion": -0.8,
+    "monedas": []
+   },
+   {
+    "n": 24,
+    "puntuacion": 0.8,
+    "monedas": [
+     "BTC",
+     "ETH"
+    ]
+   },
+   {
+    "n": 25,
+    "puntuacion": -0.4,
+    "monedas": [
+     "BTC",
+     "ETH"
+    ]
+   }
+  ]
+ },
+ "tool_calls": []
+}

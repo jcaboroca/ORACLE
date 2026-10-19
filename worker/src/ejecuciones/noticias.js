@@ -1,6 +1,6 @@
 // @ts-check
-// Cron `1 * * * *` (spec §5): RSS + Reddit → titulares nuevos → un lote al LLM → purga.
-// Subpeticiones externas: 14 RSS + 3 Reddit + hasta 2 LLM (Groq, Gemini) = 19. Llamadas a D1: 6.
+// Cron `1 * * * *` (spec §5): RSS + Reddit → titulares nuevos → LLM en lotes de 25 → purga.
+// Subpeticiones externas: 14 RSS + 3 Reddit + hasta 2 LLM (Groq, Gemini) por lote × 4 lotes = 25. Llamadas a D1: 6.
 import { normalizarTexto } from '../../../core/lexico.js'
 import { HORA } from '../../../core/velas.js'
 import { leerMonedas } from '../config.js'
@@ -17,9 +17,12 @@ import {
 export const VENTANA_MS = 48 * HORA
 /** Fechas de hasta 1 h en el futuro se aceptan (relojes de los feeds). */
 export const TOLERANCIA_FUTURO_MS = HORA
-/** Titulares por llamada al LLM; los que no entren se puntúan en la ejecución siguiente. */
+/** Titulares al LLM por ejecución (4 llamadas de 25); los que no entren se puntúan en la ejecución siguiente. */
 export const LOTE_LLM = 80
-/** La estrategia solo usa las últimas 24 h: no merece la pena puntuar lo más antiguo. */
+/**
+ * La estrategia solo usa las últimas 24 h: no merece la pena puntuar lo más antiguo. Los titulares de 24-48 h
+ * se guardan (para deduplicar) pero se quedan sin puntuar a propósito: `puntuacion` y `motor` NULL.
+ */
 export const VENTANA_PUNTUAR_MS = 24 * HORA
 
 /**

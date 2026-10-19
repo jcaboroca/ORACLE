@@ -1,0 +1,51 @@
+{
+ "id": "chatcmpl-c913814e-22e7-43f0-bd9e-7bd633b40531",
+ "object": "chat.completion",
+ "created": 1792374164,
+ "model": "@cf/meta/llama-3.1-8b-fast-v2",
+ "choices": [
+  {
+   "index": 0,
+   "message": {
+    "role": "assistant",
+    "content": "{\"explicaciones\":{\"BTC\":\"La moneda tiene un veredicto de MANTENER debido a su puntuación técnica positiva y ausencia de señales de tendencia lateral en el corto plazo.\", \"ETH\":\"La moneda tiene un veredicto de MANTENER debido a su puntuación técnica negativa y ausencia de señales de tendencia en el corto plazo.\", \"SOL\":\"La moneda tiene un veredicto de MANTENER debido a su puntuación técnica positiva y señal de tendencia alcista en el largo plazo.\", \"BNB\":\"La moneda tiene un veredicto de MANTENER debido a su puntuación técnica positiva y ausencia de señales de tendencia en el corto plazo.\", \"XRP\":\"La moneda tiene un veredicto de MANTENER debido a su puntuación técnica negativa y señal de tendencia bajista en el corto plazo.\"}}",
+    "refusal": null,
+    "annotations": null,
+    "audio": null,
+    "function_call": null,
+    "reasoning": null
+   },
+   "logprobs": null,
+   "finish_reason": "stop",
+   "stop_reason": null,
+   "token_ids": null,
+   "routed_experts": null
+  }
+ ],
+ "service_tier": null,
+ "usage": {
+  "prompt_tokens": 769,
+  "completion_tokens": 217,
+  "total_tokens": 986,
+  "prompt_tokens_details": {
+   "cached_tokens": 0
+  },
+  "neurons": 10.733492851257324
+ },
+ "prompt_logprobs": null,
+ "prompt_token_ids": null,
+ "prompt_text": null,
+ "kv_transfer_params": null,
+ "ec_transfer_params": null,
+ "metrics": null,
+ "response": {
+  "explicaciones": {
+   "BTC": "La moneda tiene un veredicto de MANTENER debido a su puntuación técnica positiva y ausencia de señales de tendencia lateral en el corto plazo.",
+   "ETH": "La moneda tiene un veredicto de MANTENER debido a su puntuación técnica negativa y ausencia de señales de tendencia en el corto plazo.",
+   "SOL": "La moneda tiene un veredicto de MANTENER debido a su puntuación técnica positiva y señal de tendencia alcista en el largo plazo.",
+   "BNB": "La moneda tiene un veredicto de MANTENER debido a su puntuación técnica positiva y ausencia de señales de tendencia en el corto plazo.",
+   "XRP": "La moneda tiene un veredicto de MANTENER debido a su puntuación técnica negativa y señal de tendencia bajista en el corto plazo."
+  }
+ },
+ "tool_calls": []
+}

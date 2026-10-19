@@ -1,10 +1,23 @@
 // @ts-check
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
+import { readFileSync } from 'node:fs'
 import {
-  GEMINI, GROQ, explicarSenales, extraerJson, plantillaExplicacion, proveedores, puntuarTitulares,
+  GEMINI, GROQ, TITULARES_POR_LLAMADA, explicarSenales, extraerJson, plantillaExplicacion, proveedores, puntuarTitulares,
+  rescatarTitulares,
 } from '../src/fuentes/llm.js'
 import { simularFetch } from './ayudantes.js'
+
+/** Salida real de `AI.run` grabada en producción (2026-10-19) con el prompt de titulares. @param {string} nombre */
+const grabada = (nombre) => JSON.parse(readFileSync(new URL(`./fixtures/${nombre}`, import.meta.url), 'utf8'))
+/** 80 titulares, llama-3.1-8b-instruct-fp8 sin modo JSON: 65 elementos con `"monedas:[]` y sin `}` final. */
+const ROTA_80 = grabada('workers-ai-titulares-80-llama-3.1-8b-fp8.json')
+/** 25 titulares, llama-3.1-8b-instruct-fp8-fast con esquema JSON: `response` llega como objeto. */
+const ESQUEMA_25 = grabada('workers-ai-titulares-25-llama-3.1-8b-fp8-fast-esquema.json')
+/** 5 señales reales, llama-3.1-8b-instruct-fp8-fast con esquema JSON. */
+const EXPLICACIONES = grabada('workers-ai-explicaciones-llama-3.1-8b-fp8-fast-esquema.json')
+/** @param {number} n */
+const titularesDePrueba = (n) => Array.from({ length: n }, (_, i) => ({ id: `t${i + 1}`, titulo: `Titular de prueba ${i + 1}` }))
 
 const MONEDAS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP']
 const TITULARES = [
@@ -14,8 +27,9 @@ const TITULARES = [
 ]
 
 /**
- * Binding AI simulado: devuelve las respuestas en orden y guarda las entradas.
- * @param {...(string|Error)} respuestas
+ * Binding AI simulado: devuelve las respuestas en orden y guarda las entradas. Un texto se envuelve en
+ * `{ response }`; un objeto (salida grabada de `AI.run`) se devuelve tal cual.
+ * @param {...(string|Error|object)} respuestas
  */
 function simularAi(...respuestas) {
   /** @type {{ modelo: string, entrada: any }[]} */
@@ -27,7 +41,7 @@ function simularAi(...respuestas) {
       llamadas.push({ modelo, entrada })
       const r = respuestas.shift() ?? new Error('sin respuesta')
       if (r instanceof Error) throw r
-      return { response: r }
+      return typeof r === 'string' ? { response: r } : r
     },
   }
 }
@@ -195,5 +209,97 @@ describe('explicaciones', () => {
     const { textos, fallos } = await explicarSenales({ env: { AI: ai, LLM_MODELO_CF: 'm' }, fetch: simularFetch(() => ({})), senales: [senal()] })
     assert.equal(textos.BTC.motor, 'plantilla')
     assert.deepEqual(fallos, ['llm cf: respuesta no válida'])
+  })
+})
+
+describe('Workers AI con salidas reales', () => {
+  test('rescatarTitulares recupera los 80 elementos de la salida rota grabada (comilla de clave sin cerrar, sin } final)', () => {
+    assert.equal(extraerJson(ROTA_80.response)?.titulares, undefined, 'como JSON estricto no vale')
+    const r = /** @type {any} */ (rescatarTitulares(ROTA_80.response))
+    assert.equal(r.titulares.length, 80)
+    assert.deepEqual(r.titulares.map((/** @type {any} */ t) => t.n), Array.from({ length: 80 }, (_, i) => i + 1))
+    assert.deepEqual(r.titulares[4], { n: 5, puntuacion: 0, monedas: [] })
+    assert.deepEqual(r.titulares[5], { n: 6, puntuacion: 0.2, monedas: ['BTC', 'SOL'] })
+  })
+
+  test('rescatarTitulares: signo + y comas finales se aceptan; lo irreparable se descarta; sin objetos → null', () => {
+    const r = /** @type {any} */ (rescatarTitulares('Aquí va: {"n":1,"puntuacion":+0.4,"monedas":["BTC",],} {"n":2,"puntuacion":0.1,"monedas":[BTC]} {"n":3,"puntuacion":-0.3,"monedas":[]}'))
+    assert.deepEqual(r.titulares, [{ n: 1, puntuacion: 0.4, monedas: ['BTC'] }, { n: 3, puntuacion: -0.3, monedas: [] }])
+    assert.equal(rescatarTitulares('sin json'), null)
+    assert.equal(rescatarTitulares(undefined), null)
+  })
+
+  test('la salida rota grabada ya no manda los titulares al léxico: el lote se puntúa con cf', async () => {
+    const titulares = titularesDePrueba(TITULARES_POR_LLAMADA)
+    const { resultados, fallos } = await puntuarTitulares({
+      env: { AI: simularAi(ROTA_80), LLM_MODELO_CF: 'm' }, fetch: simularFetch(() => ({})), titulares, monedas: MONEDAS,
+    })
+    assert.deepEqual(fallos, [])
+    assert.deepEqual(Object.values(resultados).map((r) => r.motor), Array(TITULARES_POR_LLAMADA).fill('cf'))
+    assert.deepEqual(resultados.t6, { puntuacion: 0.2, monedas: ['BTC', 'SOL'], motor: 'cf' })
+  })
+
+  test('response como objeto (modo JSON) se interpreta; la petición lleva esquema con n acotado y monedas permitidas', async () => {
+    const ai = simularAi(ESQUEMA_25)
+    const titulares = titularesDePrueba(25)
+    const { resultados, fallos } = await puntuarTitulares({ env: { AI: ai, LLM_MODELO_CF: 'm' }, fetch: simularFetch(() => ({})), titulares, monedas: MONEDAS })
+    assert.deepEqual(fallos, [])
+    assert.deepEqual(Object.values(resultados).map((r) => r.motor), Array(25).fill('cf'))
+    assert.deepEqual(resultados.t1, { puntuacion: -0.2, monedas: ['XRP'], motor: 'cf' })
+    const formato = ai.llamadas[0].entrada.response_format
+    assert.equal(formato.type, 'json_schema')
+    const item = formato.json_schema.properties.titulares.items
+    assert.deepEqual(item.required, ['n', 'puntuacion', 'monedas'])
+    assert.deepEqual([item.properties.n.minimum, item.properties.n.maximum], [1, 25])
+    assert.deepEqual([item.properties.puntuacion.minimum, item.properties.puntuacion.maximum], [-1, 1])
+    assert.deepEqual(item.properties.monedas.items.enum, [...MONEDAS, 'MERCADO'])
+  })
+
+  test(`lotes de ${TITULARES_POR_LLAMADA}: 60 titulares → 3 llamadas numeradas desde 1; un lote fallido cae solo él en cascada`, async () => {
+    /** @type {any[]} */
+    const entradas = []
+    const ai = {
+      /** @param {string} _m @param {any} entrada */
+      async run(_m, entrada) {
+        entradas.push(entrada)
+        const lote = JSON.parse(entrada.messages[1].content).titulares
+        if (entradas.length === 2) return { response: 'lo siento, no puedo' }
+        return { response: { titulares: lote.map((/** @type {any} */ t) => ({ n: t.n, puntuacion: 0.1, monedas: ['BTC'] })) } }
+      },
+    }
+    const fetch = simularFetch(() => respuestaGroq(JSON.stringify({ titulares: Array.from({ length: 25 }, (_, i) => ({ n: i + 1, puntuacion: -0.3, monedas: [] })) })))
+    const titulares = titularesDePrueba(60)
+    const { resultados, fallos } = await puntuarTitulares({ env: { AI: ai, LLM_MODELO_CF: 'm', GROQ_API_KEY: 'k' }, fetch, titulares, monedas: MONEDAS })
+    assert.deepEqual(entradas.map((e) => JSON.parse(e.messages[1].content).titulares.length), [25, 25, 10])
+    assert.deepEqual(entradas.map((e) => JSON.parse(e.messages[1].content).titulares[0]), [
+      { n: 1, titulo: 'Titular de prueba 1' }, { n: 1, titulo: 'Titular de prueba 26' }, { n: 1, titulo: 'Titular de prueba 51' },
+    ])
+    assert.equal(fetch.llamadas.length, 1, 'Groq solo para el lote 2')
+    assert.deepEqual(fallos, ['llm cf (lote 2/3): respuesta no válida'])
+    assert.deepEqual(resultados.t25, { puntuacion: 0.1, monedas: ['BTC'], motor: 'cf' })
+    assert.deepEqual(resultados.t26, { puntuacion: -0.3, monedas: [], motor: 'groq' })
+    assert.deepEqual(resultados.t50, { puntuacion: -0.3, monedas: [], motor: 'groq' })
+    assert.deepEqual(resultados.t60, { puntuacion: 0.1, monedas: ['BTC'], motor: 'cf' })
+  })
+
+  test('modelo sin esquema JSON (error 5025): reintenta una vez sin response_format', async () => {
+    const ai = simularAi(new Error("5025: This model doesn't support JSON Schema."), JSON.stringify({ titulares: [{ n: 1, puntuacion: 0.3, monedas: ['ETH'] }] }))
+    const { resultados, fallos } = await puntuarTitulares({ env: { AI: ai, LLM_MODELO_CF: 'm' }, fetch: simularFetch(() => ({})), titulares: TITULARES.slice(0, 1), monedas: MONEDAS })
+    assert.deepEqual(fallos, [])
+    assert.deepEqual(resultados.a, { puntuacion: 0.3, monedas: ['ETH'], motor: 'cf' })
+    assert.equal(ai.llamadas.length, 2)
+    assert.ok(ai.llamadas[0].entrada.response_format)
+    assert.equal(ai.llamadas[1].entrada.response_format, undefined)
+  })
+
+  test('explicaciones: response como objeto (salida grabada) → texto del LLM; la petición pide cada símbolo', async () => {
+    const ai = simularAi(EXPLICACIONES)
+    const senales = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'].map((simbolo) => senal({ simbolo, veredicto: 'MANTENER' }))
+    const { textos, fallos } = await explicarSenales({ env: { AI: ai, LLM_MODELO_CF: 'm' }, fetch: simularFetch(() => ({})), senales })
+    assert.deepEqual(fallos, [])
+    assert.deepEqual(Object.values(textos).map((t) => t.motor), Array(5).fill('cf'))
+    assert.equal(textos.BTC.texto, EXPLICACIONES.response.explicaciones.BTC)
+    const esquema = ai.llamadas[0].entrada.response_format.json_schema
+    assert.deepEqual(esquema.properties.explicaciones.required, ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'])
   })
 })
