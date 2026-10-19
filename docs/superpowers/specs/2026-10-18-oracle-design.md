@@ -112,8 +112,9 @@ Binance, y los gráficos de la PWA piden las velas a Binance desde el navegador.
   cliente con como mucho **2 en vuelo**; las «rubik» (long/short y open interest, ~5 cada 2 s por
   IP) van de una en una con 450 ms entre ellas. Una respuesta 429/50011 activa un **freno común**
   de 1,2 s (no sale ninguna petición nueva mientras dura), que se duplica con cada freno seguido
-  sin aciertos hasta 8 s; la limitada se reintenta **una vez** al acabar, sin perder su turno, con
-  un tope de 10 reintentos por ejecución (§9).
+  sin aciertos hasta 8 s; la limitada se reintenta al acabar, sin perder su turno: **una vez** los
+  derivados (opcionales) y hasta **dos** las velas (sin ellas la moneda queda `SIN_DATOS`; con un solo
+  reintento alguna serie seguía cayendo en producción), con un tope de 10 reintentos por ejecución (§9).
 - Los derivados son opcionales: si una petición falla, esa subpuntuación queda ausente (§6.2) y
   la ejecución sigue.
 - El open interest se toma en monedas (`oiCcy`) y no en USD, para que el cambio de precio no se

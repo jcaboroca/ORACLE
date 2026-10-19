@@ -6,7 +6,7 @@ import { serie } from '../../test/ayudantes.js'
 import { completarDerivados, descargarDerivados, leerFunding, leerLongShort, leerOpenInterest } from '../src/fuentes/derivados.js'
 import { FNG, descargarFng, leerFng } from '../src/fuentes/fng.js'
 import {
-  CONCURRENCIA, ESPACIADO_RUBIK_MS, LIMITE_EUR, LIMITE_VELAS, MAX_REINTENTOS, OKX, PAUSA_MAXIMA_MS, PAUSA_REINTENTO_MS, VELAS,
+  CONCURRENCIA, ESPACIADO_RUBIK_MS, LIMITE_EUR, LIMITE_VELAS, MAX_REINTENTOS, OKX, PAUSA_MAXIMA_MS, PAUSA_REINTENTO_MS, REINTENTOS_VELAS, VELAS,
   cambio24h, crearCliente, descargarMoneda, descargarVelas, leerVelas, ultimoCierre,
 } from '../src/fuentes/okx.js'
 import { cuerposConsumidos, fixtureJson, simularFetch } from './ayudantes.js'
@@ -218,6 +218,16 @@ describe('okx: cliente con límite de ritmo', () => {
     await assert.rejects(c2.pedir('/api/v5/public/funding-rate?instId=BTC-USDT-SWAP'), /^Error: HTTP 429 \(código 50011\)$/)
     assert.equal(siempre.medidas.llamadas.length, 2, 'un solo reintento por petición')
     assert.ok([...fetch.respuestas, ...siempre.respuestas].every((r) => r.bodyUsed))
+  })
+
+  test('las velas (imprescindibles) se reintentan hasta 2 veces; el resto, 1', async () => {
+    const velas = fetchLento(() => LIMITE)
+    await assert.rejects(descargarVelas(crearCliente(velas, { esperar: crearEspera() }), 'BTC-USDT', '1h'), /429/)
+    assert.equal(velas.medidas.llamadas.length, 1 + REINTENTOS_VELAS)
+    assert.equal(REINTENTOS_VELAS, 2)
+    const derivado = fetchLento(() => LIMITE)
+    await assert.rejects(crearCliente(derivado, { esperar: crearEspera() }).pedir('/api/v5/public/funding-rate?instId=BTC-USDT-SWAP'), /429/)
+    assert.equal(derivado.medidas.llamadas.length, 2)
   })
 
   test('el reintento no pierde su turno: va antes que las peticiones que esperaban en la cola', async () => {

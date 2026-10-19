@@ -39,6 +39,12 @@ export const PAUSA_REINTENTO_MS = 1200
  * puede seguir saturada varios segundos (en producción, una pausa fija de 1,2 s agotaba los reintentos).
  */
 export const PAUSA_MAXIMA_MS = 8000
+/**
+ * Reintentos de cada petición de velas (imprescindibles: sin ellas la moneda queda SIN_DATOS). El resto
+ * (derivados, opcionales) se reintenta una vez. En producción, con un solo reintento, alguna serie seguía
+ * cayendo con la IP compartida saturada.
+ */
+export const REINTENTOS_VELAS = 2
 /** Reintentos por ejecución entre todas las peticiones: 35 a OKX + 10 + F&G + 2 LLM = 48 ≤ 50 subpeticiones. */
 export const MAX_REINTENTOS = 10
 const CODIGO_LIMITE = '50011'
@@ -83,7 +89,8 @@ async function pedirOkx(fetch, url) {
  * y separadas ESPACIADO_RUBIK_MS. Una respuesta limitada (429/50011) activa un freno común de
  * PAUSA_REINTENTO_MS (ninguna petición sale mientras dura: las que ya estaban en vuelo son las únicas que
  * pueden fallar), que se duplica con cada freno seguido sin aciertos hasta PAUSA_MAXIMA_MS; la limitada se
- * reintenta una vez al acabar, con MAX_REINTENTOS en total para no pasar de 50 subpeticiones.
+ * reintenta al acabar (una vez; las velas, REINTENTOS_VELAS), con MAX_REINTENTOS en total para no pasar de
+ * 50 subpeticiones.
  * @param {typeof fetch} fetch
  * @param {{ esperar?: (ms: number) => Promise<void>, concurrencia?: number, espaciadoRubik?: number,
  *   pausaReintento?: number, pausaMaxima?: number, maxReintentos?: number }} [opciones] esperar: inyectable en los tests.
@@ -125,11 +132,12 @@ export function crearCliente(fetch, {
   }
 
   /**
-   * Pide `url` ocupando un hueco de CONCURRENCIA; si la limitan, espera al freno y la reintenta una vez
-   * sin soltar el hueco (así no pierde el turno frente a las que esperaban en la cola).
+   * Pide `url` ocupando un hueco de CONCURRENCIA; si la limitan, espera al freno y la reintenta (hasta
+   * `maximo` veces) sin soltar el hueco (así no pierde el turno frente a las que esperaban en la cola).
    * @param {string} url
+   * @param {number} maximo
    */
-  const conReintento = async (url) => {
+  const conReintento = async (url, maximo) => {
     await adquirir()
     try {
       for (let intento = 0; ; intento++) {
@@ -141,7 +149,7 @@ export function crearCliente(fetch, {
         } catch (e) {
           if (!(/** @type {any} */ (e)?.limite)) throw e
           frenar()
-          if (intento > 0 || reintentos >= maxReintentos) throw e
+          if (intento >= maximo || reintentos >= maxReintentos) throw e
           reintentos++
         }
       }
@@ -153,15 +161,16 @@ export function crearCliente(fetch, {
   return {
     /**
      * @param {string} ruta p. ej. '/api/v5/market/candles?instId=BTC-USDT&bar=1H&limit=300'
+     * @param {number} [maximo] reintentos de esta petición si la limitan (429/50011)
      * @returns {Promise<unknown[]>}
      */
-    pedir(ruta) {
+    pedir(ruta, maximo = 1) {
       const url = `${OKX}${ruta}`
-      if (!ruta.startsWith('/api/v5/rubik/')) return conReintento(url)
+      if (!ruta.startsWith('/api/v5/rubik/')) return conReintento(url, maximo)
       const pausa = rubikPedidas++ > 0
       const peticion = turnoRubik.then(async () => {
         if (pausa) await esperar(espaciadoRubik)
-        return conReintento(url)
+        return conReintento(url, maximo)
       })
       turnoRubik = peticion.catch(() => undefined)
       return peticion
@@ -224,7 +233,7 @@ export function leerVelas(datos, duracion) {
  * @returns {Promise<Vela[]>}
  */
 export async function descargarVelas(cliente, instId, intervalo, limite = LIMITE_VELAS) {
-  const datos = await cliente.pedir(`${RUTA_VELAS}?instId=${instId}&bar=${BARRAS[intervalo]}&limit=${limite}`)
+  const datos = await cliente.pedir(`${RUTA_VELAS}?instId=${instId}&bar=${BARRAS[intervalo]}&limit=${limite}`, REINTENTOS_VELAS)
   return leerVelas(datos, DURACION[intervalo])
 }
 
