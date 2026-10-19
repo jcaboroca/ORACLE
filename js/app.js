@@ -2,11 +2,11 @@
 // Arranque de la PWA: sesión con PIN, rutas por hash, refresco cada 5 min solo con la página visible,
 // avisos y service worker. Las vistas construyen su DOM; aquí solo se orquesta.
 import { baseApi } from '../config.js'
-import { crearApi, mensajeError, pideLogin } from './api.js'
+import { crearApi, esBloqueo, mensajeError, pideLogin } from './api.js'
 import { aviso, h } from './dom.js'
 import { crearRefresco } from './refresco.js'
 import { hashDe, leerRuta, seccionDe } from './rutas.js'
-import { crearSesion } from './sesion.js'
+import { crearSesion, tratarErrorDeSesion } from './sesion.js'
 import { vistaBacktest } from './vistas/backtest.js'
 import { vistaBot } from './vistas/bot.js'
 import { vistaLogin } from './vistas/login.js'
@@ -71,13 +71,19 @@ function navegar(hash) {
   else location.hash = hash
 }
 
-/** @param {unknown} e */
+/** 401: olvida el PIN y vuelve al acceso. Bloqueo: avisa con la hora y conserva el PIN. @param {unknown} e */
 function exigirPin(e) {
-  if (!pideLogin(e)) return false
-  sesion.olvidar()
-  mensajeLogin = mensajeError(e)
-  navegar(hashDe('login'))
-  return true
+  const reaccion = tratarErrorDeSesion(e, sesion)
+  if (reaccion === 'login') {
+    mensajeLogin = mensajeError(e)
+    navegar(hashDe('login'))
+    return true
+  }
+  if (reaccion === 'bloqueo') {
+    avisar(mensajeError(e), 'error')
+    return true
+  }
+  return false
 }
 
 /** @param {string} pin */
@@ -123,8 +129,9 @@ async function pintar({ refresco = false } = {}) {
   try {
     pantalla = await VISTAS[ruta.vista](ctx)
   } catch (e) {
-    if (mio === turno && exigirPin(e)) return
-    pantalla = { titulo: 'Error', nodo: h('div', { class: 'vista' }, aviso(mensajeError(e), 'error')) }
+    if (mio === turno && pideLogin(e) && exigirPin(e)) return
+    // Un bloqueo se muestra en la pantalla (con su hora) sin olvidar el PIN; el refresco reintenta al pasar.
+    pantalla = { titulo: esBloqueo(e) ? 'Acceso bloqueado' : 'Error', nodo: h('div', { class: 'vista' }, aviso(mensajeError(e), 'error')) }
   }
   if (mio !== turno) return
   for (const limpiar of limpiezas.splice(0)) limpiar()

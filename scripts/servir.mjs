@@ -11,6 +11,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 export const RAIZ = resolve(fileURLToPath(new URL('..', import.meta.url)))
 export const PUERTO = 8080
+/** Solo en local: nunca expone el repositorio a la red. */
+export const ANFITRION = '127.0.0.1' // http://localhost:… sigue funcionando (mismo origen que admite el CORS)
 
 /** @type {Record<string, string>} */
 export const TIPOS = {
@@ -37,6 +39,11 @@ export function crearServidor({ raiz = RAIZ } = {}) {
       return
     }
     if (ruta.endsWith('/')) ruta += 'index.html'
+    // Nada oculto: ni .git/ ni worker/.dev.vars (secretos de desarrollo).
+    if (ruta.split(/[\\/]/).some((parte) => parte.startsWith('.'))) {
+      respuesta.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('No existe')
+      return
+    }
     const destino = join(raiz, normalize(ruta))
     // Sin esto, /../../.ssh/id_rsa saldría del directorio servido.
     if (!destino.startsWith(raiz + sep)) {
@@ -56,5 +63,5 @@ export function crearServidor({ raiz = RAIZ } = {}) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const puerto = Number(process.env.PUERTO ?? PUERTO)
-  crearServidor().listen(puerto, () => console.log(`ORACLE en http://localhost:${puerto}`))
+  crearServidor().listen(puerto, ANFITRION, () => console.log(`ORACLE en http://localhost:${puerto}`))
 }

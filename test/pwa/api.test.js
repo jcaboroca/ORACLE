@@ -1,8 +1,8 @@
 // @ts-check
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { ErrorApi, MAX_EN_VUELO, crearApi, crearLimitador, mensajeError, pideLogin } from '../../js/api.js'
-import { CLAVE_PIN, crearSesion } from '../../js/sesion.js'
+import { ErrorApi, MAX_EN_VUELO, crearApi, crearLimitador, esBloqueo, mensajeError, pideLogin } from '../../js/api.js'
+import { CLAVE_PIN, crearSesion, tratarErrorDeSesion } from '../../js/sesion.js'
 import { BASE, PIN, workerSimulado } from './ayudantes.js'
 
 /** @param {Awaited<ReturnType<typeof workerSimulado>>} w @param {string|null} [pin] */
@@ -66,13 +66,16 @@ describe('cliente de la API contra el Worker real', () => {
     assert.equal(error.estado, 429)
     assert.equal(error.codigo, 'bloqueado')
     assert.equal(error.hasta, w.ahora + 15 * 60_000)
-    assert.ok(pideLogin(error))
+    // El bloqueo no pide login: el PIN guardado puede ser el correcto (bloqueo global provocado por otros).
+    assert.equal(pideLogin(error), false)
+    assert.ok(esBloqueo(error))
     assert.match(mensajeError(error), /^Demasiados intentos con PIN incorrecto\. Acceso bloqueado hasta las \d\d:\d\d\.$/)
   })
 
-  test('sin PIN guardado manda la cabecera vacía y recibe 401', async () => {
+  test('sin PIN guardado no llama al Worker (no gasta un intento): 401 sin_sesion local que pide login', async () => {
     const w = await workerSimulado()
-    await assert.rejects(clienteDe(w, null).resumen(), (e) => e instanceof ErrorApi && e.estado === 401)
+    await assert.rejects(clienteDe(w, null).resumen(), (e) => e instanceof ErrorApi && e.estado === 401 && e.codigo === 'sin_sesion' && pideLogin(e))
+    assert.equal(w.llamadas.length, 0)
   })
 
   test('reiniciar envía capital_inicial y confirmar: true; la anterior queda cerrada', async () => {
@@ -171,6 +174,69 @@ describe('cliente de la API sin servidor', () => {
     assert.equal(maximo, MAX_EN_VUELO)
   })
 
+  test(`la vista Bot refrescada varias veces: nunca más de ${MAX_EN_VUELO} en vuelo`, async () => {
+    let enVuelo = 0
+    let maximo = 0
+    let llamadas = 0
+    const api = crearApi({
+      base: BASE, pin: () => PIN,
+      fetch: async () => {
+        llamadas++
+        enVuelo++
+        maximo = Math.max(maximo, enVuelo)
+        await new Promise((r) => setTimeout(r, 2))
+        enVuelo--
+        return new Response('{"ok":true}')
+      },
+    })
+    // Como vistaBot: bot() y luego simulaciones, operaciones y decisiones a la vez; tres refrescos seguidos.
+    for (let i = 0; i < 3; i++) {
+      await api.bot()
+      await Promise.all([api.simulaciones(), api.operaciones({ simulacion: 1 }), api.decisiones({ simulacion: 1 }), api.resumen()])
+    }
+    assert.equal(llamadas, 15)
+    assert.equal(maximo, MAX_EN_VUELO)
+  })
+
+  test('limitador: tandas consecutivas no superan el máximo y el contador vuelve a 0', async () => {
+    const limitar = crearLimitador(2)
+    let enVuelo = 0
+    let maximo = 0
+    const tarea = async () => {
+      enVuelo++
+      maximo = Math.max(maximo, enVuelo)
+      await new Promise((r) => setTimeout(r, 2))
+      enVuelo--
+    }
+    for (let tanda = 0; tanda < 3; tanda++) {
+      await Promise.all(Array.from({ length: 5 }, () => limitar(tarea)))
+      assert.equal(maximo, 2, `tanda ${tanda}`)
+      assert.equal(limitar.ocupadas(), 0, `tanda ${tanda}`)
+    }
+  })
+
+  test('una petición en cola que arranca tras cerrar sesión no llama al Worker', async () => {
+    /** @type {string|null} */
+    let pin = PIN
+    /** @type {string[]} */
+    const cabeceras = []
+    const api = crearApi({
+      base: BASE, pin: () => pin, maxEnVuelo: 1,
+      fetch: async (_url, init) => {
+        cabeceras.push(String(new Headers(init?.headers).get('Authorization')))
+        await new Promise((r) => setTimeout(r, 5))
+        return new Response('{"ok":true}')
+      },
+    })
+    const primera = api.resumen()
+    const segunda = api.bot()
+    pin = null
+    assert.deepEqual(await primera, { ok: true })
+    await assert.rejects(segunda, (e) => e instanceof ErrorApi && e.codigo === 'sin_sesion' && pideLogin(e))
+    assert.equal(cabeceras.length, 1)
+    assert.ok(cabeceras[0].endsWith(PIN))
+  })
+
   test('limitador: un fallo libera el hueco', async () => {
     const limitar = crearLimitador(1)
     await assert.rejects(limitar(async () => { throw new Error('x') }))
@@ -220,6 +286,21 @@ describe('sesión', () => {
     assert.equal(a.datos.get(CLAVE_PIN), '1234')
     assert.equal(crearSesion(a).pin(), '1234')
     s.olvidar()
+    assert.equal(s.pin(), null)
+  })
+
+  test('401 olvida el PIN y pide login; un bloqueo (aunque sea global) lo conserva; otros errores no tocan la sesión', () => {
+    const s = crearSesion(almacen())
+    s.guardar('1234')
+    const bloqueo = new ErrorApi(429, 'bloqueado', 'Demasiados intentos con PIN incorrecto. Espera y vuelve a probar.', Date.UTC(2026, 9, 19, 10))
+    assert.equal(tratarErrorDeSesion(bloqueo, s), 'bloqueo')
+    assert.equal(s.pin(), '1234')
+    assert.match(mensajeError(bloqueo), /^Demasiados intentos con PIN incorrecto\. Acceso bloqueado hasta las \d\d:\d\d\.$/)
+    assert.equal(tratarErrorDeSesion(new ErrorApi(502, 'http', 'Error 502 del servidor.'), s), null)
+    assert.equal(tratarErrorDeSesion(new ErrorApi(429, 'ocupado', 'Hay otros intentos de PIN en curso.'), s), null)
+    assert.equal(tratarErrorDeSesion(new Error('x'), s), null)
+    assert.equal(s.pin(), '1234')
+    assert.equal(tratarErrorDeSesion(new ErrorApi(401, 'pin_incorrecto', 'PIN incorrecto.'), s), 'login')
     assert.equal(s.pin(), null)
   })
 

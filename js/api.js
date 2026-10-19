@@ -32,24 +32,25 @@ export const PLAZO_ANALIZAR_MS = 60_000
 const esperarMs = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /**
- * Semáforo FIFO: como mucho `max` tareas a la vez.
+ * Semáforo FIFO: como mucho `max` tareas a la vez. `ocupadas()` cuenta los huecos en uso.
  * @param {number} max
  */
 export function crearLimitador(max) {
   let activas = 0
   /** @type {(() => void)[]} */
   const cola = []
+  // El hueco pasa directamente a la siguiente en cola (el contador no cambia); solo se libera si nadie espera.
   const soltar = () => {
-    activas--
     const siguiente = cola.shift()
     if (siguiente) siguiente()
+    else activas--
   }
   /**
    * @template T
    * @param {() => Promise<T>} tarea
    * @returns {Promise<T>}
    */
-  return async function limitar(tarea) {
+  async function limitar(tarea) {
     if (activas >= max) await new Promise((r) => cola.push(() => r(undefined)))
     else activas++
     try {
@@ -58,6 +59,7 @@ export function crearLimitador(max) {
       soltar()
     }
   }
+  return Object.assign(limitar, { ocupadas: () => activas })
 }
 
 /**
@@ -97,8 +99,11 @@ export function crearApi({
    * @returns {Promise<any>}
    */
   async function unaVez(metodo, url, cuerpo, plazo) {
+    // Sin PIN (sesión cerrada mientras esperaba turno) no se llama: el Worker contaría un intento fallido.
+    const clave = pin()
+    if (!clave) throw new ErrorApi(401, 'sin_sesion', 'Introduce el PIN para continuar.')
     /** @type {Record<string, string>} */
-    const cabeceras = { Authorization: `Bearer ${pin() ?? ''}` }
+    const cabeceras = { Authorization: `Bearer ${clave}` }
     if (cuerpo !== undefined) cabeceras['Content-Type'] = 'application/json'
     const control = new AbortController()
     let agotado = false
@@ -159,10 +164,16 @@ export function crearApi({
 /** @typedef {ReturnType<typeof crearApi>} Api */
 
 /**
- * El error obliga a volver a pedir el PIN: incorrecto (401) o IP bloqueada (429 `bloqueado`).
+ * El error obliga a volver a pedir el PIN: incorrecto o sin sesión (401).
  * @param {unknown} e
  */
-export const pideLogin = (e) => e instanceof ErrorApi && (e.estado === 401 || e.codigo === 'bloqueado')
+export const pideLogin = (e) => e instanceof ErrorApi && e.estado === 401
+
+/**
+ * Acceso bloqueado (429 `bloqueado`, por IP o global). No dice que el PIN guardado sea malo: se conserva.
+ * @param {unknown} e
+ */
+export const esBloqueo = (e) => e instanceof ErrorApi && e.codigo === 'bloqueado'
 
 /**
  * Mensaje para la persona usuaria, en español.

@@ -1,6 +1,7 @@
 // @ts-check
 // El PIN se guarda una vez en el dispositivo (spec §12). Si localStorage no está disponible
 // (modo privado), vive solo en memoria mientras la app siga abierta.
+import { esBloqueo, pideLogin } from './api.js'
 
 export const CLAVE_PIN = 'oracle.pin'
 
@@ -40,3 +41,18 @@ export function crearSesion(almacen) {
 }
 
 /** @typedef {ReturnType<typeof crearSesion>} Sesion */
+
+/**
+ * Qué hace la sesión ante un error de la API. 401: olvida el PIN y toca volver al acceso ('login').
+ * Bloqueo: conserva el PIN (puede ser el correcto: el bloqueo global lo provoca cualquiera) y se muestra
+ * el aviso con su hora ('bloqueo'). Cualquier otro error no toca la sesión (null).
+ * @param {unknown} e @param {Sesion} sesion
+ * @returns {'login'|'bloqueo'|null}
+ */
+export function tratarErrorDeSesion(e, sesion) {
+  if (pideLogin(e)) {
+    sesion.olvidar()
+    return 'login'
+  }
+  return esBloqueo(e) ? 'bloqueo' : null
+}

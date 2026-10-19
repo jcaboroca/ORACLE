@@ -2,8 +2,8 @@
 import assert from 'node:assert/strict'
 import { request } from 'node:http'
 import { describe, test } from 'node:test'
-import { crearApiSimulada } from '../../scripts/api-simulada.mjs'
-import { crearServidor } from '../../scripts/servir.mjs'
+import { ANFITRION as ANFITRION_API, crearApiSimulada } from '../../scripts/api-simulada.mjs'
+import { ANFITRION, crearServidor } from '../../scripts/servir.mjs'
 import { PIN } from './ayudantes.js'
 
 /**
@@ -58,9 +58,23 @@ describe('servidor estático de desarrollo', () => {
       assert.equal(await crudo(base, '/%E0%A4%A'), 400)
     })
   })
+
+  test('no sirve archivos ni carpetas ocultas (.git, worker/.dev.vars…) y solo escucha en local', async () => {
+    assert.equal(ANFITRION, '127.0.0.1')
+    await con(crearServidor(), async (base) => {
+      for (const ruta of ['/.git/HEAD', '/.git/config', '/.gitignore', '/worker/.dev.vars', '/%2Egit/HEAD', '/js/.oculto/x.js']) {
+        assert.equal(await crudo(base, ruta), 404, ruta)
+      }
+      assert.equal(await crudo(base, '/js/api.js'), 200)
+    })
+  })
 })
 
 describe('API simulada de desarrollo', () => {
+  test('solo escucha en local', () => {
+    assert.equal(ANFITRION_API, '127.0.0.1')
+  })
+
   test('es el Worker real: salud pública, PIN obligatorio y CORS para localhost:8080', async () => {
     await con(await crearApiSimulada(), async (base) => {
       assert.equal((await fetch(`${base}/api/salud`)).status, 200)

@@ -1,6 +1,6 @@
 // @ts-check
 // Piezas comunes de las vistas.
-import { mensajeError, pideLogin } from '../api.js'
+import { esBloqueo, mensajeError, pideLogin } from '../api.js'
 import { aviso, h } from '../dom.js'
 import { ATRIBUCION } from '../graficos.js'
 
@@ -17,7 +17,8 @@ import { ATRIBUCION } from '../graficos.js'
  *   refrescar: () => void,
  *   exigirPin: (e: unknown) => boolean,
  * }} Contexto
- * exigirPin: si el error pide PIN (401 o bloqueo), vuelve al acceso y devuelve true. Para errores en eventos.
+ * exigirPin: si el error pide PIN (401) vuelve al acceso; si es un bloqueo, avisa con su hora y conserva el PIN.
+ * Devuelve true si lo ha tratado. Para errores en eventos.
  * @typedef {{ titulo: string, nodo: HTMLElement, montar?: () => (void | (() => void)) }} Pantalla
  */
 
@@ -33,11 +34,12 @@ export function seccion(titulo, ...hijos) {
 }
 
 /**
- * Error de una parte de la vista: si exige PIN se propaga (la app vuelve al acceso); si no, aviso en su sitio.
+ * Error de una parte de la vista: si exige PIN o hay bloqueo se propaga (la app vuelve al acceso o muestra el
+ * bloqueo); si no, aviso en su sitio.
  * @param {unknown} e
  */
 export function avisoDeError(e) {
-  if (pideLogin(e)) throw e
+  if (pideLogin(e) || esBloqueo(e)) throw e
   return aviso(mensajeError(e), 'error')
 }
 

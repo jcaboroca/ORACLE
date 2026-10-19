@@ -91,7 +91,8 @@ con GitHub Pages en <https://jcaboroca.github.io/ORACLE/>. Se instala en el iPho
   `http://localhost:8080` (var `ORIGENES`).
 - Cliente de la API: como mucho 2 peticiones a la vez (el Worker reserva un intento de PIN por petición en
   vuelo), reintento automático ante 429 `ocupado` (hasta 3 veces) y plazo de 20 s (60 s en «Analizar
-  ahora», que tarda 25-35 s). 401 o bloqueo por PIN → vuelta al acceso con el mensaje del Worker.
+  ahora», que tarda 25-35 s). 401 → olvida el PIN y vuelve al acceso; sin PIN no se llama al Worker.
+  Bloqueo (por IP o global) → aviso con la hora de fin, conservando el PIN guardado.
 - Gráficos con [TradingView Lightweight Charts™](https://www.tradingview.com/) v5.2.1 (Apache-2.0,
   `vendor/`). Iconos generados desde `icons/icono.svg` con `npm run iconos`.
 
@@ -99,6 +100,8 @@ con GitHub Pages en <https://jcaboroca.github.io/ORACLE/>. Se instala en el iPho
 npm run dev            # http://localhost:8080
 npm run api-simulada   # otra terminal: el Worker real con datos sintéticos de los tests en :8787, PIN 4815162342
 ```
+
+Ambos escuchan solo en `127.0.0.1`, y `npm run dev` no sirve rutas ocultas (`.git/`, `worker/.dev.vars`…).
 
 Para probar contra el Worker de verdad en local, en lugar de la API simulada usa `npx wrangler@4 dev`
 desde `worker/` (ver la checklist del plan 2).

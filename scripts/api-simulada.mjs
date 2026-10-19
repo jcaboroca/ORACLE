@@ -9,6 +9,8 @@ import { pathToFileURL } from 'node:url'
 import { PIN, workerSimulado } from '../test/pwa/ayudantes.js'
 
 export const PUERTO = 8787
+/** Solo en local: nunca expone la API simulada a la red. */
+export const ANFITRION = '127.0.0.1'
 
 /** @param {import('node:http').IncomingMessage} peticion */
 async function cuerpoDe(peticion) {
@@ -35,5 +37,5 @@ export async function crearApiSimulada() {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const puerto = Number(process.env.PUERTO ?? PUERTO)
   const servidor = await crearApiSimulada()
-  servidor.listen(puerto, () => console.log(`API simulada (datos sintéticos de los tests) en http://localhost:${puerto} · PIN ${PIN}`))
+  servidor.listen(puerto, ANFITRION, () => console.log(`API simulada (datos sintéticos de los tests) en http://localhost:${puerto} · PIN ${PIN}`))
 }
