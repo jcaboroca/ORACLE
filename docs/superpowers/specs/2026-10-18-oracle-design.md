@@ -106,11 +106,13 @@ Binance, y los gráficos de la PWA piden las velas a Binance desde el navegador.
   y exige velas alineadas a UTC (`inicio` múltiplo de la duración). `1Dutc` es el día UTC, como el
   `1d` de Binance (`1D` sería el día de Hong Kong); las `4H` ya empiezan en múltiplos de 4 h UTC.
 - Una respuesta HTTP no 2xx o con `code ≠ "0"` es un error con el estado o el código de OKX.
-- **Límite de ritmo.** Las IPs de salida de Cloudflare son compartidas y OKX llegó a responder
-  429 `{"code":"50011"}` en una ráfaga en paralelo. Todas las peticiones a OKX de una ejecución
-  pasan por un cliente con como mucho 4 en vuelo; las «rubik» (long/short y open interest, ~5
-  cada 2 s por IP) van de una en una con 450 ms entre ellas; una respuesta 429/50011 se reintenta
-  **una vez** tras 1,2 s, con un tope de 6 reintentos por ejecución (§9).
+- **Límite de ritmo.** Las IPs de salida de Cloudflare son compartidas y OKX responde 429
+  `{"code":"50011"}` a ráfagas (en producción, el cron de las hh:03 con 4 peticiones en vuelo
+  perdió las 8 series de BTC y ETH). Todas las peticiones a OKX de una ejecución pasan por un
+  cliente con como mucho **2 en vuelo**; las «rubik» (long/short y open interest, ~5 cada 2 s por
+  IP) van de una en una con 450 ms entre ellas. Una respuesta 429/50011 activa un **freno común**
+  de 1,2 s (no sale ninguna petición nueva mientras dura) y la limitada se reintenta **una vez**
+  al acabar, con un tope de 10 reintentos por ejecución (§9).
 - Los derivados son opcionales: si una petición falla, esa subpuntuación queda ausente (§6.2) y
   la ejecución sigue.
 - El open interest se toma en monedas (`oiCcy`) y no en USD, para que el cambio de precio no se
@@ -455,9 +457,9 @@ a partir de las filas de D1.
 | KV escrituras: 1.000/día por cuenta (usado por 4 proyectos) | **0**: ORACLE no usa KV | 0 % |
 | D1 escrituras: 100.000/día | ~5 decisiones + ~5 progreso + 1 capital + ~50 titulares/h ≈ 1.700/día; + ~4 filas por petición con PIN (reserva y liberación del intento) ≈ 1.200/día con ~300 peticiones | ~3 % |
 | D1 lecturas: 5 M/día | consultas indexadas y acotadas: ninguna ruta recorre una tabla entera ni ordena aparte (comprobado con `EXPLAIN QUERY PLAN` en los tests); `GET /api/bot` lee ~720 puntos horarios + ~2 filas por día de historia, no la curva ni las decisiones completas | < 1 % |
-| Subpeticiones: 50/invocación | noticias ≈ 19; mercado = 15 velas USDT + 5 EUR + 15 derivados (funding + 2 rubik por moneda) a OKX + hasta 6 reintentos por límite de ritmo + 1 F&G + hasta 2 LLM (Groq, Gemini) = 38, como mucho 44 | bajo límite |
-| CPU: 10 ms/invocación | parsing ligero (regex para RSS, sin librerías XML); mercado: ~0,5 MB de JSON de velas de OKX (15 × 300 USDT, ~30 KB cada una, + 5 × 48 EUR) validado y convertido en una sola pasada, derivados de ~0,2-3 KB por petición; `[observability]` activo para ver la CPU real por invocación en Workers Logs | por invocación: si se excede, solo falla esa ejecución de ORACLE |
-| Tiempo de reloj (no es CPU) | las 10 peticiones rubik van en serie con 450 ms entre ellas: la ejecución de mercado y `POST /api/analizar` tardan ~5-7 s | sin límite de reloj en crons; aceptable en la petición manual |
+| Subpeticiones: 50/invocación | noticias ≈ 19; mercado = 15 velas USDT + 5 EUR + 15 derivados (funding + 2 rubik por moneda) a OKX + hasta 10 reintentos por límite de ritmo + 1 F&G + hasta 2 LLM (Groq, Gemini) = 38, como mucho 48 | bajo límite |
+| CPU: 10 ms/invocación | parsing ligero (regex para RSS, sin librerías XML); mercado: ~0,55 MB de JSON de velas de OKX (15 × 300 USDT, ~30 KB cada una, + 5 × 48 EUR) validado y convertido en una sola pasada, derivados de ~0,2-3 KB por petición; `[observability]` activo para ver la CPU real por invocación en Workers Logs. **Medido en producción (2026-10-19): `POST /api/analizar` 46 ms y cron de mercado 41 ms de CPU** (noticias, 28 ms), con resultado `ok`: por encima de los 10 ms nominales. En Node, en caliente, parsear las 20 series cuesta ~5-9 ms y `ejecutarHora` ~1-4 ms; en frío (isolate nuevo, como en cada cron) bastante más | por invocación: si Cloudflare llegara a cortar por CPU, solo falla esa ejecución de ORACLE; vigilar en Workers Logs (§13) |
+| Tiempo de reloj (no es CPU) | las 10 peticiones rubik van en serie con 450 ms entre ellas y el LLM tarda varios segundos: medido 24,6 s en `POST /api/analizar` y 18,9 s en el cron de mercado | sin límite de reloj en crons; lento pero aceptable en la petición manual |
 
 Salvaguardas: la PWA solo consulta al abrirse y cada 5 min mientras está visible; las
 velas del gráfico van del navegador a Binance directamente; PIN con bloqueo; sin reintentos

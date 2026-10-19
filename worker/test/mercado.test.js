@@ -225,18 +225,18 @@ describe('ejecutarMercado (cron)', () => {
     assert.ok(db.llamadas <= 17, `${db.llamadas} llamadas a D1`)
   })
 
-  test('OKX limitando (429/50011) en todo: 6 reintentos como mucho (44 subpeticiones), SIN_DATOS y ejecución ok', async () => {
+  test('OKX limitando (429/50011) en todo: 10 reintentos como mucho (48 subpeticiones ≤ 50), SIN_DATOS y ejecución ok', async () => {
     const db = crearD1()
     const ahora = ahoraDe(0)
     const fetch = fetchEscenario(crearEscenario(), ahora, { limitado: true })
     const env = { ...entorno(db, 'BTC,ETH,SOL,BNB,XRP'), GROQ_API_KEY: 'g', GEMINI_API_KEY: 'k' }
     const r = await ejecutarMercado({ esperar: sinEspera, env, fetch, ahora })
     assert.equal(r.ejecucion.ok, true)
-    assert.equal(fetch.llamadas.length, 20 + 15 + 6 + 1 + 2)
+    assert.equal(fetch.llamadas.length, 20 + 15 + 10 + 1 + 2)
     assert.ok(fetch.llamadas.length <= 50)
     assert.ok(r.senales.every((s) => s.veredicto === 'SIN_DATOS'))
     const detalle = JSON.parse(await db.prepare('SELECT detalle_json FROM ejecuciones').first('detalle_json'))
-    assert.equal(detalle.reintentosOkx, 6)
+    assert.equal(detalle.reintentosOkx, 10)
   })
 })
 

@@ -21,14 +21,21 @@ export const LIMITE_VELAS = VENTANA + 1
  */
 export const LIMITE_EUR = 48
 
-/** Peticiones a OKX en vuelo a la vez, como mucho. */
-export const CONCURRENCIA = 4
+/**
+ * Peticiones a OKX en vuelo a la vez, como mucho. Las velas admiten 40 cada 2 s por IP, pero la IP de
+ * salida de Cloudflare es compartida: en producción, 4 a la vez a las hh:03 recibieron 429 en ráfaga.
+ * Con 2 el tiempo total apenas cambia (lo marca la cola rubik).
+ */
+export const CONCURRENCIA = 2
 /** Pausa entre peticiones rubik (estadísticas de contratos: ~5 cada 2 s por IP, y Cloudflare comparte IPs). */
 export const ESPACIADO_RUBIK_MS = 450
-/** Pausa antes del único reintento de una petición limitada (HTTP 429 o código 50011). */
+/**
+ * Pausa tras una respuesta limitada (HTTP 429 o código 50011): frena a TODAS las peticiones a OKX (no
+ * sale ninguna nueva) y después la limitada se reintenta una vez.
+ */
 export const PAUSA_REINTENTO_MS = 1200
-/** Reintentos por ejecución entre todas las peticiones: 35 a OKX + 6 + F&G + 2 LLM = 44 ≤ 50 subpeticiones. */
-export const MAX_REINTENTOS = 6
+/** Reintentos por ejecución entre todas las peticiones: 35 a OKX + 10 + F&G + 2 LLM = 48 ≤ 50 subpeticiones. */
+export const MAX_REINTENTOS = 10
 const CODIGO_LIMITE = '50011'
 
 /** @param {number} ms */
@@ -68,8 +75,10 @@ async function pedirOkx(fetch, url) {
 
 /**
  * Cliente de OKX para una ejecución: como mucho CONCURRENCIA peticiones en vuelo; las rubik, de una en una
- * y separadas ESPACIADO_RUBIK_MS; una petición limitada (429/50011) se reintenta una vez tras
- * PAUSA_REINTENTO_MS, con MAX_REINTENTOS en total para no pasar de 50 subpeticiones.
+ * y separadas ESPACIADO_RUBIK_MS. Una respuesta limitada (429/50011) activa un freno común de
+ * PAUSA_REINTENTO_MS (ninguna petición sale mientras dura: las que ya estaban en vuelo son las únicas que
+ * pueden fallar) y la limitada se reintenta una vez al acabar, con MAX_REINTENTOS en total para no pasar de
+ * 50 subpeticiones.
  * @param {typeof fetch} fetch
  * @param {{ esperar?: (ms: number) => Promise<void>, concurrencia?: number, espaciadoRubik?: number,
  *   pausaReintento?: number, maxReintentos?: number }} [opciones] esperar: inyectable en los tests.
@@ -83,6 +92,14 @@ export function crearCliente(fetch, {
   const cola = []
   let reintentos = 0
   let rubikPedidas = 0
+  /** @type {Promise<void>|null} */
+  let freno = null
+  const frenar = () => {
+    if (!freno) {
+      freno = esperar(pausaReintento).then(() => { freno = null })
+    }
+    return freno
+  }
   /** @type {Promise<unknown>} */
   let turnoRubik = Promise.resolve()
 
@@ -104,7 +121,11 @@ export function crearCliente(fetch, {
   const intentar = async (url) => {
     await adquirir()
     try {
+      while (freno) await freno
       return await pedirOkx(fetch, url)
+    } catch (e) {
+      if (/** @type {any} */ (e)?.limite) frenar()
+      throw e
     } finally {
       liberar()
     }
@@ -117,7 +138,7 @@ export function crearCliente(fetch, {
     } catch (e) {
       if (!(/** @type {any} */ (e)?.limite) || reintentos >= maxReintentos) throw e
       reintentos++
-      await esperar(pausaReintento)
+      // intentar() espera a que pase el freno que activó este fallo antes de volver a pedir.
       return intentar(url)
     }
   }

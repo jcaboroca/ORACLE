@@ -6,7 +6,7 @@ import { serie } from '../../test/ayudantes.js'
 import { completarDerivados, descargarDerivados, leerFunding, leerLongShort, leerOpenInterest } from '../src/fuentes/derivados.js'
 import { FNG, descargarFng, leerFng } from '../src/fuentes/fng.js'
 import {
-  ESPACIADO_RUBIK_MS, LIMITE_EUR, LIMITE_VELAS, MAX_REINTENTOS, OKX, PAUSA_REINTENTO_MS, VELAS,
+  CONCURRENCIA, ESPACIADO_RUBIK_MS, LIMITE_EUR, LIMITE_VELAS, MAX_REINTENTOS, OKX, PAUSA_REINTENTO_MS, VELAS,
   cambio24h, crearCliente, descargarMoneda, descargarVelas, leerVelas, ultimoCierre,
 } from '../src/fuentes/okx.js'
 import { cuerposConsumidos, fixtureJson, simularFetch } from './ayudantes.js'
@@ -163,12 +163,33 @@ describe('okx: cliente con límite de ritmo', () => {
   const OK = { code: '0', msg: '', data: [] }
   const LIMITE = { estado: 429, cuerpo: { code: '50011', msg: 'Too Many Requests', data: [] } }
 
-  test('como mucho 4 peticiones en vuelo a la vez', async () => {
+  test('como mucho 2 peticiones en vuelo a la vez (OKX: 40 velas cada 2 s por IP, y la IP es compartida)', async () => {
     const fetch = fetchLento(() => ({ cuerpo: OK }))
     const c = crearCliente(fetch, { esperar: crearEspera() })
     await Promise.all(Array.from({ length: 20 }, (_, i) => c.pedir(`/api/v5/market/candles?instId=X${i}-USDT&bar=1H&limit=300`)))
     assert.equal(fetch.medidas.llamadas.length, 20)
-    assert.equal(fetch.medidas.maximo, 4)
+    assert.equal(CONCURRENCIA, 2)
+    assert.equal(fetch.medidas.maximo, CONCURRENCIA)
+  })
+
+  test('freno común: tras un 429 ninguna petición sale hasta que pasa la pausa; luego se reintenta la limitada', async () => {
+    let n = 0
+    const fetch = fetchLento(() => (n++ === 0 ? LIMITE : { cuerpo: OK }))
+    /** @type {(() => void)[]} */
+    const pendientes = []
+    /** @type {number[]} */
+    const esperas = []
+    /** @param {number} ms */
+    const esperar = (ms) => new Promise((r) => { esperas.push(ms); pendientes.push(() => r(undefined)) })
+    const c = crearCliente(fetch, { esperar })
+    const todas = Promise.all(Array.from({ length: 6 }, (_, i) => c.pedir(`/api/v5/market/candles?instId=X${i}-USDT`)))
+    for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r))
+    assert.deepEqual(esperas, [PAUSA_REINTENTO_MS], 'una sola pausa para todos')
+    assert.equal(fetch.medidas.llamadas.length, 2, 'solo las 2 que ya estaban en vuelo')
+    for (const p of pendientes) p()
+    await todas
+    assert.equal(fetch.medidas.llamadas.length, 6 + 1)
+    assert.equal(c.reintentos, 1)
   })
 
   test(`rubik: de una en una y con ${ESPACIADO_RUBIK_MS} ms entre ellas (≈ 5 cada 2 s por IP)`, async () => {
@@ -216,6 +237,7 @@ describe('okx: cliente con límite de ritmo', () => {
     const c = crearCliente(fetch, { esperar: crearEspera() })
     const r = await Promise.allSettled(Array.from({ length: 35 }, (_, i) => c.pedir(`/api/v5/market/candles?instId=X${i}-USDT`)))
     assert.ok(r.every((x) => x.status === 'rejected'))
+    assert.equal(MAX_REINTENTOS, 10, '20 velas + 15 derivados + 10 + F&G + 2 LLM = 48 ≤ 50')
     assert.equal(c.reintentos, MAX_REINTENTOS)
     assert.equal(fetch.medidas.llamadas.length, 35 + MAX_REINTENTOS)
   })
