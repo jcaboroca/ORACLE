@@ -40,12 +40,25 @@ v2 se eligió con un protocolo walk-forward (entrenamiento 2022-10 → 2024-10, 
 2026-10) y **no superó a v1 en el periodo de prueba** (−23,1 % frente a −18,5 % con la ventana
 de 299 velas; comprar y mantener: +23,3 %). Detalle, tabla y limitaciones en la spec §6.6.
 
-v3–v5 salen del **laboratorio de estrategias** (abajo): v3 es la única familia que cumple el criterio
-de «estrategia ganadora» fuera de muestra 2020–2025 (+2.895 % con 38,7 % de caída máxima, frente a
-+4.715 % y 78,0 % de comprar y mantener); v4 y v5 son las siguientes del ranking y **no** lo cumplen. En el
-tramo reservado (2026) las tres pierden (−11,0 %, −2,2 % y −9,2 %), menos que comprar y mantener
-(−16,3 %). Ninguna bate a comprar y mantener en rentabilidad: lo que reducen es la caída. Resultados y
-limitaciones en la [spec del laboratorio §9](docs/superpowers/specs/2026-10-20-oracle-laboratorio-design.md).
+v3–v5 salen del **laboratorio de estrategias** (abajo): F3 Momentum (v3) es la única familia que cumple el
+criterio de «estrategia ganadora» fuera de muestra 2020–2025. Su cadena walk-forward (la configuración
+elegida en cada año: 2020 60 días semanal con stop, 2021 30 diaria, 2022–2023 30 diaria con stop, 2024–2025
+la desplegada) da +2.895 % con 38,7 % de caída máxima, frente a +4.715 % y 78,0 % de comprar y mantener; el
++5.622 % de la configuración desplegada en 2020–2025 es **dentro de muestra**. v4 y v5 son las siguientes
+del ranking y **no** lo cumplen: van en vivo por una regla (completar hasta 3, marcadas experimentales)
+decidida **después** de ver que solo había una ganadora, en contra de §4 de la spec. Elegir la nº 1 por su
+ranking fuera de muestra ya es una selección sobre esos resultados, así que la única comprobación limpia es
+el tramo reservado (2026): ahí las tres pierden y **v3 es la peor** (−11,0 % con caída 26,6 %, frente a
+v4 −2,2 % / 19,4 % y v5 −9,2 % / 28,6 %; comprar y mantener −16,3 % / 49,5 %). Ninguna bate a comprar y
+mantener en rentabilidad: lo que reducen es la caída.
+
+**v3 no es robusta:** L = 30 días es el valor más bajo de la rejilla y su único vecino en L (60 días
+semanal) tiene un cociente rentabilidad/caída de 9,5 frente a 144,6 (≈ 93 % menos); todo momentum con
+L ≥ 60 falla el límite de caída (62–79 % frente a 46,8 %), y la meseta se cumple solo gracias a dos vecinos
+que mantienen L = 30 (30 diaria, 93,0; 30 semanal con stop, 105,7). Además depende del día de revisión:
+el lunes estaba fijado de antemano, pero revisando en domingo o miércoles la caída supera el 46,8 % y no
+cumpliría el criterio. Resultados, tabla por día de la semana y limitaciones en la
+[spec del laboratorio §9](docs/superpowers/specs/2026-10-20-oracle-laboratorio-design.md).
 
 ## Laboratorio de estrategias
 
@@ -74,8 +87,10 @@ Descarga histórico real de Binance (pares USDT para indicadores, EUR para ejecu
 Fear & Greed, lo cachea en `scripts/.cache/` y escribe `data/backtest-vN.json` según la
 estrategia.
 
-El backtest evalúa la variante **técnico + Fear & Greed**: no hay histórico gratuito fiable de
-titulares ni de derivados, así que esos componentes no participan (sus pesos se renormalizan).
+El backtest de v1 y v2 evalúa la variante **técnico + Fear & Greed**: no hay histórico gratuito fiable de
+titulares ni de derivados, así que esos componentes no participan (sus pesos se renormalizan). v3–v5 son
+**solo técnico** (velas, sin Fear & Greed): cada estrategia declara su variante (`VARIANTE_BACKTEST`) y
+`data/backtest-vN.json` la publica.
 
 ## Worker (Cloudflare)
 
@@ -112,7 +127,7 @@ con GitHub Pages en <https://jcaboroca.github.io/ORACLE/>. Se instala en el iPho
   frescura y «Analizar ahora»), detalle de moneda (velas 1H/4H/1D de Binance pedidas desde el navegador
   —de OKX si Binance falla, con la fuente indicada— con EMA20/50/200 y RSI, desglose T/D/N/F, titulares e historial), Bot (cartera frente a comprar y
   mantener, curva, métricas, posiciones, operaciones, decisiones, simulaciones y reinicio) y Backtest
-  (`data/backtest-vN.json`, variante técnico + Fear & Greed).
+  (`data/backtest-vN.json`; v1 y v2 técnico + Fear & Greed, v3–v5 solo técnico).
 - Refresca al abrir y cada 5 minutos solo mientras está visible. El service worker guarda únicamente la
   estructura de la app; los datos (API, Binance/OKX, backtest) van siempre a la red.
 - `config.js` tiene la URL del Worker (`API_PRODUCCION` = `https://oracle.mundialisimo.workers.dev`); en

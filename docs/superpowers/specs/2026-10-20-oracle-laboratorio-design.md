@@ -142,17 +142,30 @@ lado; cartera de 10.000 € por tramo con 20 % por posición (como mucho 100 % i
 - **Meseta** (punto 5): de la configuración que se despliega (la elegida con todo hasta
   2025-12-31) frente a sus vecinas a un paso (un solo eje, valor contiguo), con el cociente del
   encadenado 2020–2025 de cada una.
-- **Selección**: primero las familias que cumplen, por ranking; como solo cumple una, se completa
-  hasta 3 con las siguientes del ranking **marcadas como experimentales** (las 3 simulaciones en
-  vivo de §6). Es una lectura del último párrafo de §4: la letra pide desplegar solo las que
-  cumplen; aquí se despliegan 3 y las que no cumplen van etiquetadas.
+
+### 9.1 bis Desviación decidida tras ver la primera ejecución
+
+- **Selección completada hasta 3**: primero las familias que cumplen, por ranking; como solo cumple
+  una, se completa hasta 3 con las siguientes del ranking **marcadas como experimentales** (las 3
+  simulaciones en vivo de §6, porque se pidieron 3 en paralelo). Esta regla **no** estaba fijada de
+  antemano: se decidió **después** de que la primera ejecución mostrara una sola ganadora, y
+  **contradice §4**, que pide desplegar solo las que cumplen. v4 y v5 están en vivo por esta
+  desviación, no por haber superado la validación.
+- **Tramo reservado calculado más de una vez**: §4 dice que se mira una sola vez; en la práctica el
+  laboratorio (y con él el tramo reservado de v3–v5) se ejecutó más de una vez. La ejecución es
+  determinista y el orden del ranking no cambió entre ejecuciones, pero el tramo reservado no se
+  «miró una sola vez» en sentido estricto.
 
 ### 9.2 Ranking fuera de muestra (2020–2025 encadenado)
 
 Comprar y mantener en el mismo periodo: **+4.714,9 %**, caída máxima **78,0 %** (límite del punto 2:
 0,6 × 78,0 % = 46,8 %).
 
-| # | Familia | Config. desplegada | Rentab. | Caída máx. | Rentab./caída | Oper. | Criterio (1-2-3-4-5) | Versión |
+Rentabilidad, caída, cociente y operaciones son los de la **cadena fuera de muestra del
+procedimiento walk-forward** (en cada año, la configuración elegida con su entrenamiento), **no** los
+de la configuración desplegada, que puede ser otra en cada año (ver debajo de la tabla).
+
+| # | Familia | Config. desplegada | Rentab. (cadena walk-forward) | Caída máx. | Rentab./caída | Oper. | Criterio (1-2-3-4-5) | Versión |
 |---|---|---|---|---|---|---|---|---|
 | 1 | F3 Momentum | 30 días, revisión semanal, sin stop | +2.894,7 % | 38,7 % | 74,8 | 547 | ✓ ✓ ✓ ✓ ✓ **cumple** | v3 |
 | 2 | F1 Cruce de medias | EMA10/EMA50, sin stop | +1.264,4 % | 58,4 % | 21,6 | 240 | ✓ ✗ ✓ ✗ ✓ no cumple | v4 (experimental) |
@@ -167,8 +180,44 @@ F4 apenas gana (positiva en 3 de 6 años) y pierde en SOL y BNB. Meseta (cocient
 de vecinas): F3 144,6 → 93,0; F1 32,3 → 22,8; F2 48,7 → 35,8; F5 12,9 → 7,5; F4 2,0 → 1,0.
 
 Configuración elegida en cada entrenamiento (F3): 2020 60 días semanal con stop; 2021 30 diaria sin
-stop; 2022 y 2023 30 diaria con stop; 2024 y 2025 30 semanal sin stop. La desplegada (30 semanal sin
-stop) es la que elige el mismo procedimiento con todo hasta 2025-12-31.
+stop; 2022 y 2023 30 diaria con stop; 2024 y 2025 30 semanal sin stop (la desplegada). Así que el
++2.894,7 % de F3 no es el resultado de v3: la desplegada (30 semanal sin stop, la que elige el mismo
+procedimiento con todo hasta 2025-12-31) da **+5.622,0 %** (caída 38,9 %, cociente 144,6) en 2020–2025,
+pero esa cifra es **dentro de muestra** (2020–2025 es su propio entrenamiento).
+
+**Sesgo de selección sobre el fuera de muestra:** elegir la familia nº 1 por su ranking fuera de
+muestra es, en sí, una selección hecha mirando resultados fuera de muestra (5 familias compitiendo
+sobre los mismos años), así que la cifra de la ganadora está sesgada al alza. La única comprobación
+limpia es el tramo reservado 2026 (§9.5), y **ahí v3 fue la peor de las tres desplegadas**: −11,0 %
+(caída 26,6 %) frente a v4 −2,2 % (19,4 %) y v5 −9,2 % (28,6 %); comprar y mantener −16,3 % (49,5 %).
+
+**Robustez de v3 (momentum 30 días, revisión semanal en lunes, sin stop): no hay meseta amplia.**
+
+- L = 30 es el **valor más bajo** de la rejilla (L ∈ {30, 60, 90, 120, 180}): solo tiene vecino por
+  arriba. Ese único vecino de L (60 días semanal sin stop) tiene un cociente de **9,5 frente a 144,6**
+  (≈ 93 % menos).
+- **Todas** las configuraciones de momentum con L ≥ 60 (con y sin stop, diaria y semanal) **fallan el
+  punto 2**: caída encadenada 2020–2025 entre el 62 % y el 79 % frente al límite de 46,8 %.
+- El punto 5 (meseta) se cumple solo gracias a los dos vecinos que **mantienen L = 30**: 30 diaria sin
+  stop (93,0) y 30 semanal con stop (105,7); la mediana de los tres vecinos es 93,0 ≥ 50 % de 144,6.
+- **Sensibilidad al día de revisión** (misma configuración revisando cada día de la semana,
+  2020–2025 encadenado con el mismo motor; límite del punto 2: 46,8 %):
+
+| Día de revisión | Rentabilidad | Caída encadenada (punto 2) | Rentab./caída | Peor caída de un año |
+|---|---|---|---|---|
+| Domingo | +3.020,5 % | 53,3 % | 56,7 | 47,0 % |
+| **Lunes (desplegada)** | **+5.622,0 %** | **38,9 %** | **144,6** | **38,9 %** |
+| Martes | +3.913,8 % | 44,8 % | 87,3 | 38,1 % |
+| Miércoles | +1.728,4 % | 49,2 % | 35,2 | 47,3 % |
+| Jueves | +4.244,6 % | 41,6 % | 102,1 | 38,1 % |
+| Viernes | +3.277,0 % | 41,5 % | 78,9 | 41,5 % |
+| Sábado | +3.783,1 % | 46,8 % | 80,8 | 44,5 % |
+
+  El lunes estaba fijado de antemano (§3, «semanal (lunes)»), así que no hay sesgo por haberlo elegido,
+  pero es el mejor de los 7 días y el resultado depende mucho de él: revisando en domingo o en
+  miércoles la caída supera el 46,8 % (con la caída encadenada, también el sábado, por milésimas:
+  46,82 %) y v3 no cumpliría el criterio. La caída encadenada incluye los tramos que cruzan el cambio
+  de año; la columna «peor caída de un año» es el máximo de las caídas anuales.
 
 ### 9.3 Por año (fuera de muestra) frente a comprar y mantener
 
@@ -193,7 +242,7 @@ Comprar y mantener: 2020-2021 sin SOL (BTC, ETH, BNB, XRP); desde 2022, las 5.
 | F5 v1 + stops | +799 | +8.145 | −14.920 | +23.031 | −19.488 |
 | F4 Caídas | +154 | +447 | −946 | −696 | +2.540 |
 
-### 9.5 Tramo reservado (2026-01-01 → 2026-10-20, mirado una vez, con 5 monedas)
+### 9.5 Tramo reservado (2026-01-01 → 2026-10-20, con 5 monedas; no se usó para elegir)
 
 | Versión | Rentabilidad | Caída máx. | Operaciones | Comprar y mantener |
 |---|---|---|---|---|
@@ -202,23 +251,28 @@ Comprar y mantener: 2020-2021 sin SOL (BTC, ETH, BNB, XRP); desde 2022, las 5.
 | v5 (F2 Ruptura, experimental) | −9,2 % | 28,6 % | 35 | −16,3 % (caída 49,5 %) |
 
 Las tres pierden en 2026, menos que comprar y mantener y con entre el 39 % y el 58 % de su caída.
-No se usó para elegir nada.
+**v3, la nº 1 del ranking, es la peor de las tres** en rentabilidad. No se usó para elegir nada, pero
+se calculó más de una vez (§9.1 bis).
 
 Backtest habitual de 2 años (`data/backtest-v3…v5.json`, 2024-10-20 → 2026-10-20, ejecución con
-pares EUR): v3 +107,0 % (caída 35,8 %, 117 operaciones), v4 +78,1 % (32,9 %, 88), v5 +56,9 %
-(41,1 %, 75); comprar y mantener +24,3 % (64,4 %). **Ojo:** ese periodo se solapa con los años 2024
+pares EUR, variante solo técnico): v3 +107,1 % (caída 35,8 %, 117 operaciones), v4 +78,2 % (32,9 %, 88),
+v5 +57,6 % (41,1 %, 75); comprar y mantener +24,8 % (64,4 %). **Ojo:** ese periodo se solapa con los años 2024
 y 2025 usados para elegir la configuración desplegada, así que **no** es fuera de muestra.
 
 ### 9.6 Conclusión (honesta)
 
 - Solo **F3 Momentum** cumple los 5 puntos: gana en 5 de 6 años, con todas las monedas en positivo
-  y la mitad de la caída de comprar y mantener (38,7 % frente a 78,0 %), y su meseta es amplia (las
-  vecinas conservan el 64 % del cociente). Es la estrategia principal (v3). Las demás familias de
+  y la mitad de la caída de comprar y mantener (38,7 % frente a 78,0 %). Pero **no es robusta**: L = 30
+  está en el borde de la rejilla, todo momentum con L ≥ 60 falla el punto 2, la meseta se cumple solo
+  con vecinos que mantienen L = 30 y el resultado depende del día de revisión (§9.2). Es la estrategia
+  principal (v3). Las demás familias de
   tendencia (F1, F2, F5) ganan mucho en el encadenado pero con caídas por encima del límite y
   pérdidas en 2-3 monedas: van en vivo como **experimentales** (v4 y v5) para comparar, no como
-  ganadoras. F4 (comprar caídas) apenas gana.
-- **Ninguna bate a comprar y mantener en rentabilidad** fuera de muestra (+2.895 % frente a
-  +4.715 %): lo que se gana es caída menor (sobre todo en 2022), no más beneficio. En años alcistas
+  ganadoras, por una regla decidida tras ver los resultados (§9.1 bis). F4 (comprar caídas) apenas gana.
+- En la única comprobación limpia (tramo reservado 2026), v3 fue la peor de las tres.
+- **Ninguna bate a comprar y mantener en rentabilidad** fuera de muestra (cadena walk-forward de F3
+  +2.895 % frente a +4.715 %; el +5.622 % de la configuración desplegada es dentro de muestra): lo que
+  se gana es caída menor (sobre todo en 2022), no más beneficio. En años alcistas
   fuertes (2020, 2021, 2023) todas se quedan muy por detrás.
 - **Riesgo de sobreajuste y sesgos:** 66 configuraciones y 5 familias sobre un solo mercado muy
   tendencial; la elección de F3 varió entre tramos (60/30 días, diaria/semanal, con y sin stop) y su
