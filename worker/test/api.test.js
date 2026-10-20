@@ -2,7 +2,6 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { velaDeDecision } from '../../core/bot.js'
-import { ESTRATEGIA_ACTIVA } from '../../core/estrategias.js'
 import { calcularMetricas } from '../../core/metricas.js'
 import { HORA } from '../../core/velas.js'
 import {
@@ -14,6 +13,10 @@ import { crearSimulacion, guardarCapital, guardarPuntuaciones, insertarTitulares
 import { simularFetch } from './ayudantes.js'
 import { Sentencia, crearD1 } from './d1.js'
 import { ahoraDe, crearEscenario, fetchEscenario, sinEspera } from './escenario.js'
+import { vivoDePrueba } from './vivo.js'
+
+/** Una sola estrategia en vivo, v1: los tests no dependen de la lista de producción (core/estrategias.js). */
+const V1 = vivoDePrueba(['v1'])
 
 const PIN = '4815162342'
 const ORIGEN = 'https://jcaboroca.github.io'
@@ -28,9 +31,9 @@ const entorno = (db) => ({
  * @param {ReturnType<typeof crearD1>} db
  * @param {string} ruta
  * @param {{ metodo?: string, pin?: string|null, origen?: string, ip?: string, cuerpo?: unknown, ahora?: number,
- *   fetch?: typeof fetch }} [op]
+ *   fetch?: typeof fetch, vivo?: import('../src/vivo.js').Vivo }} [op]
  */
-async function pedir(db, ruta, { metodo = 'GET', pin = PIN, origen = ORIGEN, ip = '1.2.3.4', cuerpo, ahora = ahoraDe(6), fetch } = {}) {
+async function pedir(db, ruta, { metodo = 'GET', pin = PIN, origen = ORIGEN, ip = '1.2.3.4', cuerpo, ahora = ahoraDe(6), fetch, vivo = V1 } = {}) {
   /** @type {Record<string, string>} */
   const cabeceras = { Origin: origen, 'CF-Connecting-IP': ip }
   if (pin !== null) cabeceras.Authorization = `Bearer ${pin}`
@@ -38,7 +41,7 @@ async function pedir(db, ruta, { metodo = 'GET', pin = PIN, origen = ORIGEN, ip 
     method: metodo, headers: cabeceras, body: cuerpo === undefined ? undefined : JSON.stringify(cuerpo),
   })
   const res = await atender(peticion, {
-    env: entorno(db), fetch: fetch ?? fetchEscenario(crearEscenario(), ahora), ahora, esperar: sinEspera,
+    env: entorno(db), fetch: fetch ?? fetchEscenario(crearEscenario(), ahora), ahora, esperar: sinEspera, vivo,
   })
   const texto = await res.text()
   return { estado: res.status, cabeceras: res.headers, cuerpo: texto ? JSON.parse(texto) : null }
@@ -50,7 +53,7 @@ async function conDatos() {
   const escenario = crearEscenario()
   await crearSimulacion(db, { capitalInicial: 10_000, version: 'v1', ahora: 0 })
   for (let k = 0; k < 6; k++) {
-    await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(escenario, ahoraDe(k)), ahora: ahoraDe(k) })
+    await ejecutarMercado({ vivo: V1, esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(escenario, ahoraDe(k)), ahora: ahoraDe(k) })
   }
   const t = ahoraDe(5)
   await insertarTitulares(db, [
@@ -231,7 +234,7 @@ describe('GET /api/salud (pública)', () => {
     const db = crearD1()
     assert.deepEqual((await pedir(db, '/api/salud', { pin: null })).cuerpo, { ok: false, ultimaEjecucion: null })
     const ahora = ahoraDe(0)
-    await ejecutarMercado({ esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(crearEscenario(), ahora), ahora })
+    await ejecutarMercado({ vivo: V1, esperar: sinEspera, env: entorno(db), fetch: fetchEscenario(crearEscenario(), ahora), ahora })
     const r = await pedir(db, '/api/salud', { pin: null, ahora: ahora + HORA })
     assert.equal(r.estado, 200)
     assert.equal(r.cuerpo.ok, true)
@@ -246,7 +249,10 @@ describe('rutas con PIN', () => {
     const db = await conDatos()
     const r = await pedir(db, '/api/resumen', { ahora: ahoraDe(5) + 60_000 })
     assert.equal(r.estado, 200)
-    assert.deepEqual(Object.keys(r.cuerpo), ['ahora', 'senales', 'fng', 'bot', 'ultimaEjecucion', 'ultimaNoticias', 'datosDesactualizados'])
+    assert.deepEqual(Object.keys(r.cuerpo), [
+      'ahora', 'estrategiaPrincipal', 'senales', 'fng', 'bot', 'ultimaEjecucion', 'ultimaNoticias', 'datosDesactualizados',
+    ])
+    assert.deepEqual(r.cuerpo.estrategiaPrincipal, { version: 'v1', etiqueta: 'v1', enVivo: 1 })
     assert.deepEqual(r.cuerpo.senales.map((/** @type {any} */ s) => s.simbolo), ['BTC', 'ETH'])
     assert.deepEqual(Object.keys(r.cuerpo.senales[0]), [
       'simbolo', 'veredicto', 'indiceConfianza', 'puntuacion', 'precioEur', 'cambio24h', 'fresca', 'calculadaEn', 'vela1h',
@@ -296,7 +302,8 @@ describe('rutas con PIN', () => {
     assert.equal(r.estado, 200)
     assert.deepEqual(Object.keys(r.cuerpo), ['simulacion', 'metricas', 'porMoneda', 'abiertas', 'curva', 'hodl'])
     assert.deepEqual(r.cuerpo.simulacion, {
-      id: 1, creadaEn: 0, cerradaEn: null, activa: true, estrategiaVersion: 'v1', capitalInicial: 10_000, saldo: r.cuerpo.simulacion.saldo,
+      id: 1, creadaEn: 0, cerradaEn: null, activa: true, estrategiaVersion: 'v1', etiqueta: 'v1', principal: true, capitalInicial: 10_000,
+      saldo: r.cuerpo.simulacion.saldo,
     })
     const m = r.cuerpo.metricas
     assert.equal(m.operaciones, 6)
@@ -343,15 +350,14 @@ describe('rutas con PIN', () => {
     assert.equal((await pedir(db, '/api/bot/operaciones?simbolo=b%27')).estado, 400)
   })
 
-  test('POST /api/bot/reiniciar exige confirmar y un capital válido; cierra la activa y abre otra', async () => {
+  test('POST /api/bot/reiniciar exige confirmar y un capital válido; cierra la activa y abre otra por estrategia en vivo', async () => {
     const db = await conDatos()
     assert.equal((await pedir(db, '/api/bot/reiniciar', { metodo: 'POST', cuerpo: { capital_inicial: 5000 } })).estado, 400)
     assert.equal((await pedir(db, '/api/bot/reiniciar', { metodo: 'POST', cuerpo: { capital_inicial: 50, confirmar: true } })).estado, 400)
     const r = await pedir(db, '/api/bot/reiniciar', { metodo: 'POST', cuerpo: { capital_inicial: 5000, confirmar: true }, ahora: 777 })
     assert.equal(r.estado, 201)
-    assert.deepEqual(r.cuerpo, {
-      simulacion: { id: 2, creadaEn: 777, cerradaEn: null, activa: true, estrategiaVersion: ESTRATEGIA_ACTIVA, capitalInicial: 5000, saldo: 5000 },
-    })
+    const nueva = { id: 2, creadaEn: 777, cerradaEn: null, activa: true, estrategiaVersion: 'v1', etiqueta: 'v1', principal: true, capitalInicial: 5000, saldo: 5000 }
+    assert.deepEqual(r.cuerpo, { simulacion: nueva, simulaciones: [nueva] })
     const lista = await pedir(db, '/api/simulaciones')
     assert.deepEqual(lista.cuerpo.items.map((/** @type {any} */ s) => [s.id, s.activa, s.cerradaEn]), [[2, true, null], [1, false, 777]])
     assert.equal((await pedir(db, '/api/bot?simulacion=1')).cuerpo.metricas.operaciones, 6, 'la cerrada conserva su historia')
@@ -420,7 +426,7 @@ describe('lecturas de D1 acotadas', () => {
       for (const ruta of [
         '/api/salud', '/api/resumen', '/api/moneda/BTC', '/api/bot', '/api/bot?simulacion=1', '/api/bot/operaciones',
         '/api/bot/operaciones?simbolo=BTC', '/api/bot/operaciones?cursor=3', '/api/bot/decisiones',
-        '/api/bot/decisiones?simbolo=ETH&cursor=9', '/api/simulaciones',
+        '/api/bot/decisiones?simbolo=ETH&cursor=9', '/api/simulaciones', '/api/bot/comparativa',
       ]) assert.equal((await pedir(db, ruta, { ahora })).estado, 200, ruta)
       assert.equal((await pedir(db, '/api/analizar', { metodo: 'POST', ahora })).estado, 200)
       assert.equal((await pedir(db, '/api/resumen', { pin: 'x', ahora })).estado, 401)

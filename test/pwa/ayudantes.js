@@ -6,6 +6,7 @@ import { ejecutarMercado } from '../../worker/src/ejecuciones/mercado.js'
 import { crearSimulacion } from '../../worker/src/repositorio.js'
 import { crearD1 } from '../../worker/test/d1.js'
 import { ahoraDe, crearEscenario, fetchEscenario, sinEspera } from '../../worker/test/escenario.js'
+import { vivoDePrueba } from '../../worker/test/vivo.js'
 
 export const PIN = '4815162342'
 export const BASE = 'https://oracle.test.workers.dev'
@@ -14,15 +15,16 @@ export const HORAS = 6
 /**
  * Worker con `HORAS` horas del escenario ejecutadas (BTC cierra por stop, ETH por take-profit).
  * Devuelve un fetch que atiende la PWA con ese Worker en el instante `ahora`.
- * @param {{ ahora?: number, ip?: string }} [op]
+ * vivo: estrategias en vivo (por defecto solo v1, sin depender de la lista de producción).
+ * @param {{ ahora?: number, ip?: string, vivo?: import('../../worker/src/vivo.js').Vivo }} [op]
  */
-export async function workerSimulado({ ahora = ahoraDe(HORAS), ip = '10.0.0.1' } = {}) {
+export async function workerSimulado({ ahora = ahoraDe(HORAS), ip = '10.0.0.1', vivo = vivoDePrueba(['v1']) } = {}) {
   const db = crearD1()
   const escenario = crearEscenario()
   const env = { DB: db, ORACLE_PIN: PIN, MONEDAS: 'BTC,ETH', ORIGENES: 'http://localhost:8080' }
   await crearSimulacion(db, { capitalInicial: 10_000, version: 'v1', ahora: 0 })
   for (let k = 0; k < HORAS; k++) {
-    await ejecutarMercado({ env, fetch: fetchEscenario(escenario, ahoraDe(k)), ahora: ahoraDe(k), esperar: sinEspera })
+    await ejecutarMercado({ env, fetch: fetchEscenario(escenario, ahoraDe(k)), ahora: ahoraDe(k), esperar: sinEspera, vivo })
   }
   /** @type {{ url: string, init: RequestInit|undefined }[]} */
   const llamadas = []
@@ -33,7 +35,7 @@ export async function workerSimulado({ ahora = ahoraDe(HORAS), ip = '10.0.0.1' }
     const cabeceras = new Headers(init?.headers)
     cabeceras.set('CF-Connecting-IP', ip)
     const peticion = new Request(url, { ...init, headers: cabeceras })
-    return atender(peticion, { env, fetch: fetchEscenario(escenario, ahora), ahora, esperar: sinEspera })
+    return atender(peticion, { env, fetch: fetchEscenario(escenario, ahora), ahora, esperar: sinEspera, vivo })
   }
   return { db, env, ahora, fetch, llamadas }
 }

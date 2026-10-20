@@ -17,10 +17,19 @@ import { HORA } from '../../core/velas.js'
  */
 
 // ── Simulaciones ─────────────────────────────────────────────────────────────
+// Una simulación activa por estrategia (migración 0006: índice único parcial sobre estrategia_version).
 
-/** @param {D1} db @returns {Promise<FilaSimulacion|null>} */
-export function simulacionActiva(db) {
-  return db.prepare('SELECT * FROM simulaciones WHERE activa = 1').first()
+/** @param {number} n */
+const marcas = (n) => Array.from({ length: n }, () => '?').join(', ')
+
+/** Simulación activa de una estrategia. @param {D1} db @param {string} version @returns {Promise<FilaSimulacion|null>} */
+export function simulacionActiva(db, version) {
+  return db.prepare('SELECT * FROM simulaciones WHERE activa = 1 AND estrategia_version = ?').bind(version).first()
+}
+
+/** Todas las simulaciones activas, por id. @param {D1} db @returns {Promise<FilaSimulacion[]>} */
+export async function simulacionesActivas(db) {
+  return (await db.prepare('SELECT * FROM simulaciones WHERE activa = 1 ORDER BY id').all()).results
 }
 
 /** @param {D1} db @param {number} id @returns {Promise<FilaSimulacion|null>} */
@@ -34,19 +43,69 @@ export async function listarSimulaciones(db) {
 }
 
 /**
- * Cierra la simulación activa (si hay) y abre otra, en un solo lote. Nada se borra.
+ * Cierra la simulación activa de la misma estrategia (si hay) y abre otra, en un solo lote. Las de otras
+ * estrategias no se tocan. Nada se borra.
  * @param {D1} db
  * @param {{ capitalInicial: number, version: string, ahora: number }} datos
  * @returns {Promise<FilaSimulacion>}
  */
 export async function crearSimulacion(db, { capitalInicial, version, ahora }) {
   const [, insercion] = await db.batch([
-    db.prepare('UPDATE simulaciones SET activa = 0, cerrada_en = ? WHERE activa = 1').bind(ahora),
+    db.prepare('UPDATE simulaciones SET activa = 0, cerrada_en = ? WHERE activa = 1 AND estrategia_version = ?').bind(ahora, version),
     db.prepare(
       'INSERT INTO simulaciones (creada_en, activa, estrategia_version, capital_inicial, saldo) VALUES (?, 1, ?, ?, ?) RETURNING *',
     ).bind(ahora, version, capitalInicial, capitalInicial),
   ])
   return insercion.results[0]
+}
+
+/**
+ * Reinicio del bot: cierra TODAS las simulaciones activas y abre una por cada versión, todas con el mismo
+ * capital y el mismo instante (la comparativa empieza igualada). Un solo lote. Devuelve las nuevas en el orden
+ * de `versiones`.
+ * @param {D1} db
+ * @param {{ capitalInicial: number, versiones: readonly string[], ahora: number }} datos
+ * @returns {Promise<FilaSimulacion[]>}
+ */
+export async function reiniciarSimulaciones(db, { capitalInicial, versiones, ahora }) {
+  const [, ...inserciones] = await db.batch([
+    db.prepare('UPDATE simulaciones SET activa = 0, cerrada_en = ? WHERE activa = 1').bind(ahora),
+    ...versiones.map((v) => db.prepare(
+      'INSERT INTO simulaciones (creada_en, activa, estrategia_version, capital_inicial, saldo) VALUES (?, 1, ?, ?, ?) RETURNING *',
+    ).bind(ahora, v, capitalInicial, capitalInicial)),
+  ])
+  return inserciones.map((r) => r.results[0])
+}
+
+/**
+ * Deja exactamente una simulación activa por cada versión de `versiones`, en un solo lote (1 llamada):
+ * 1. cierra (activa = 0, cerrada_en) las activas cuya estrategia ya no está en la lista: quedan en el historial;
+ * 2. crea con `capitalInicial` las que falten;
+ * 3. devuelve las activas en el orden de `versiones`.
+ * Si nada cambia, no escribe ninguna fila. Dos ejecuciones a la vez no pueden crear dos de la misma estrategia:
+ * el índice único parcial revierte el lote de la segunda.
+ * @param {D1} db
+ * @param {{ versiones: readonly string[], capitalInicial: number, ahora: number }} datos
+ * @returns {Promise<FilaSimulacion[]>}
+ */
+export async function sincronizarSimulaciones(db, { versiones, capitalInicial, ahora }) {
+  if (versiones.length === 0) throw new RangeError('No hay estrategias en vivo')
+  const resultados = await db.batch([
+    db.prepare(`UPDATE simulaciones SET activa = 0, cerrada_en = ? WHERE activa = 1 AND estrategia_version NOT IN (${marcas(versiones.length)})`)
+      .bind(ahora, ...versiones),
+    ...versiones.map((v) => db.prepare(
+      `INSERT INTO simulaciones (creada_en, activa, estrategia_version, capital_inicial, saldo)
+       SELECT ?, 1, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM simulaciones WHERE activa = 1 AND estrategia_version = ?)`,
+    ).bind(ahora, v, capitalInicial, capitalInicial, v)),
+    db.prepare('SELECT * FROM simulaciones WHERE activa = 1 ORDER BY id'),
+  ])
+  /** @type {FilaSimulacion[]} */
+  const activas = resultados[resultados.length - 1].results
+  return versiones.map((v) => {
+    const sim = activas.find((s) => s.estrategia_version === v)
+    if (!sim) throw new Error(`No quedó activa la simulación de ${v}`)
+    return sim
+  })
 }
 
 /**
@@ -61,25 +120,27 @@ export function guardarHodl(db, simulacionId, hodl) {
 // ── Estado del bot (spec §10, «Reconstrucción del estado del bot») ──────────
 
 /**
- * Estado de core/bot.js reconstruido sin pérdida desde D1, con una sola llamada (lote de 3 lecturas).
- * Sin fila de progreso = moneda nunca revisada (la clave no existe → −∞ en el bot).
- * @param {D1} db
- * @param {FilaSimulacion} simulacion
- * @param {ParametrosBot} parametrosBot de la estrategia de la simulación (enfriamientoHoras)
- * @returns {Promise<{ estado: Estado, hodl: Record<string, number>|null }>}
+ * Las 3 lecturas del estado de una simulación (posiciones abiertas, progreso y último stop por moneda).
+ * @param {D1} db @param {number} id
  */
-export async function cargarEstado(db, simulacion, parametrosBot) {
-  const id = simulacion.id
-  const [abiertas, progreso, stops] = await db.batch([
-    // ORDER BY id = orden de apertura, el mismo orden de claves que en memoria: valorCartera suma en ese
-    // orden y así el resultado es idéntico al del backtest hasta el último bit.
-    db.prepare("SELECT * FROM posiciones WHERE simulacion_id = ? AND estado = 'abierta' ORDER BY id").bind(id),
-    db.prepare('SELECT simbolo, ultima_vela_revisada FROM progreso WHERE simulacion_id = ?').bind(id),
-    db.prepare(
-      `SELECT simbolo, MAX(vela_salida) AS vela FROM posiciones
-       WHERE simulacion_id = ? AND estado = 'cerrada' AND motivo_salida = 'stop_loss' GROUP BY simbolo`,
-    ).bind(id),
-  ])
+const lecturasEstado = (db, id) => [
+  // ORDER BY id = orden de apertura, el mismo orden de claves que en memoria: valorCartera suma en ese
+  // orden y así el resultado es idéntico al del backtest hasta el último bit.
+  db.prepare("SELECT * FROM posiciones WHERE simulacion_id = ? AND estado = 'abierta' ORDER BY id").bind(id),
+  db.prepare('SELECT simbolo, ultima_vela_revisada FROM progreso WHERE simulacion_id = ?').bind(id),
+  db.prepare(
+    `SELECT simbolo, MAX(vela_salida) AS vela FROM posiciones
+     WHERE simulacion_id = ? AND estado = 'cerrada' AND motivo_salida = 'stop_loss' GROUP BY simbolo`,
+  ).bind(id),
+]
+
+/**
+ * @param {FilaSimulacion} simulacion
+ * @param {{ results: any[] }[]} lecturas resultados de lecturasEstado, en su orden
+ * @param {ParametrosBot} parametrosBot
+ * @returns {{ estado: Estado, hodl: Record<string, number>|null }}
+ */
+function estadoDesde(simulacion, [abiertas, progreso, stops], parametrosBot) {
   /** @type {Estado} */
   const estado = { saldo: simulacion.saldo, posiciones: {}, ultimaRevisada: {}, enfriamientoHasta: {} }
   for (const p of abiertas.results) {
@@ -91,6 +152,40 @@ export async function cargarEstado(db, simulacion, parametrosBot) {
   for (const p of progreso.results) estado.ultimaRevisada[p.simbolo] = p.ultima_vela_revisada
   for (const s of stops.results) estado.enfriamientoHasta[s.simbolo] = s.vela + parametrosBot.enfriamientoHoras * HORA
   return { estado, hodl: simulacion.hodl_json === null ? null : JSON.parse(simulacion.hodl_json) }
+}
+
+/**
+ * Estado de core/bot.js reconstruido sin pérdida desde D1, con una sola llamada (lote de 3 lecturas).
+ * Sin fila de progreso = moneda nunca revisada (la clave no existe → −∞ en el bot).
+ * @param {D1} db
+ * @param {FilaSimulacion} simulacion
+ * @param {ParametrosBot} parametrosBot de la estrategia de la simulación (enfriamientoHoras)
+ * @returns {Promise<{ estado: Estado, hodl: Record<string, number>|null }>}
+ */
+export async function cargarEstado(db, simulacion, parametrosBot) {
+  return estadoDesde(simulacion, await db.batch(lecturasEstado(db, simulacion.id)), parametrosBot)
+}
+
+/**
+ * Fila y estado de varias simulaciones en UNA llamada (lote de 1 + 3 × n lecturas), en el orden de `ids`.
+ * Igual que obtenerSimulacion + cargarEstado de cada una.
+ * @param {D1} db
+ * @param {number[]} ids
+ * @param {(version: string) => ParametrosBot} parametrosDe parámetros de bot de cada estrategia
+ * @returns {Promise<{ sim: FilaSimulacion, estado: Estado, hodl: Record<string, number>|null }[]>}
+ */
+export async function cargarEstados(db, ids, parametrosDe) {
+  if (ids.length === 0) return []
+  const [filas, ...lecturas] = await db.batch([
+    db.prepare(`SELECT * FROM simulaciones WHERE id IN (${marcas(ids.length)})`).bind(...ids),
+    ...ids.flatMap((id) => lecturasEstado(db, id)),
+  ])
+  return ids.map((id, i) => {
+    /** @type {FilaSimulacion|undefined} */
+    const sim = filas.results.find((f) => f.id === id)
+    if (!sim) throw new RangeError(`No existe la simulación ${id}`)
+    return { sim, ...estadoDesde(sim, lecturas.slice(3 * i, 3 * i + 3), parametrosDe(sim.estrategia_version)) }
+  })
 }
 
 /**
@@ -173,10 +268,11 @@ export async function guardarPasoMoneda(db, paso) {
  * acumulado de la curva hasta este punto (máximos, drawdowns y último HODL) a partir del punto anterior,
  * con las mismas operaciones y en el mismo orden que drawdownMaximo de core/metricas.js: el resultado es
  * idéntico al de recorrer la curva entera. Los puntos llegan en orden de vela (uno por ejecución de mercado).
+ * Devuelve la sentencia sin ejecutar (guardarCapital la ejecuta; guardarCapitales las agrupa en un lote).
  * @param {D1} db
- * @param {{ simulacionId: number, vela: number, valorCartera: number, saldo: number, valorHodl: number|null }} punto
+ * @param {PuntoCapital} punto
  */
-export function guardarCapital(db, { simulacionId, vela, valorCartera, saldo, valorHodl }) {
+export function sentenciaCapital(db, { simulacionId, vela, valorCartera, saldo, valorHodl }) {
   // Valor y HODL como REAL: un entero enlazado haría división entera en (máximo − valor) / máximo.
   return db.prepare(
     `INSERT OR IGNORE INTO capital (simulacion_id, vela_1h, valor_cartera, saldo, valor_hodl,
@@ -194,7 +290,21 @@ export function guardarCapital(db, { simulacionId, vela, valorCartera, saldo, va
        LEFT JOIN (SELECT maximo, drawdown, maximo_hodl, drawdown_hodl, ultimo_hodl FROM capital
          WHERE simulacion_id = ? AND vela_1h < ? ORDER BY vela_1h DESC LIMIT 1) p ON 1
      )`,
-  ).bind(saldo, simulacionId, vela, valorCartera, valorHodl, simulacionId, vela).run()
+  ).bind(saldo, simulacionId, vela, valorCartera, valorHodl, simulacionId, vela)
+}
+
+/**
+ * @typedef {{ simulacionId: number, vela: number, valorCartera: number, saldo: number, valorHodl: number|null }} PuntoCapital
+ */
+
+/** Un punto de capital (1 llamada). @param {D1} db @param {PuntoCapital} punto */
+export function guardarCapital(db, punto) {
+  return sentenciaCapital(db, punto).run()
+}
+
+/** Los puntos de capital de varias simulaciones en un lote (1 llamada; nada si no hay). @param {D1} db @param {PuntoCapital[]} puntos */
+export async function guardarCapitales(db, puntos) {
+  if (puntos.length > 0) await db.batch(puntos.map((p) => sentenciaCapital(db, p)))
 }
 
 // ── Ejecuciones ──────────────────────────────────────────────────────────────
@@ -333,9 +443,6 @@ export async function purgar(db, ahora) {
 
 // ── Caché de mercado (spec §4 y §9) ──────────────────────────────────────────
 
-/** @param {number} n */
-const marcas = (n) => Array.from({ length: n }, () => '?').join(', ')
-
 /**
  * Velas y funding guardados de las monedas configuradas, en una llamada (lote de 2 lecturas por clave primaria).
  * @param {D1} db
@@ -425,30 +532,14 @@ export async function resumenBot(db, simulacionId) {
 }
 
 /**
- * Todo lo que necesita GET /api/bot (1 llamada), con lecturas acotadas:
- * - posiciones abiertas, cada una con `precio_actual` = precio de la última decisión con precio de su
- *   moneda (búsqueda por el índice único de decisiones, no un recorrido de la historia);
- * - operaciones (crecen con la actividad del bot, no con las horas);
- * - el último punto de capital, con el resumen acumulado de la curva (core/metricas.js `ResumenCurva`);
- * - la curva para la interfaz: todos los puntos de los últimos `horariaMs` y, antes, el último punto de
- *   cada día UTC (lo mismo que submuestrearCurva de api.js), con una búsqueda por día.
+ * Las 2 lecturas de la curva para la interfaz (definición de referencia: submuestrearCurva de api.js):
+ * todos los puntos de los últimos `horariaMs` y, antes, el último punto de cada día UTC, con una búsqueda por día.
+ * Juntar sus resultados con unirCurva.
  * @param {D1} db @param {number} simulacionId @param {number} horariaMs
  */
-export async function datosBot(db, simulacionId, horariaMs) {
+function lecturasCurva(db, simulacionId, horariaMs) {
   const dia = 24 * HORA
-  const [abiertas, operaciones, ultimo, horaria, diaria] = await db.batch([
-    db.prepare(
-      `SELECT p.*, (SELECT d.precio FROM decisiones d WHERE d.simulacion_id = p.simulacion_id AND d.simbolo = p.simbolo
-         AND d.precio IS NOT NULL ORDER BY d.vela_1h DESC LIMIT 1) AS precio_actual
-       FROM posiciones p WHERE p.simulacion_id = ? AND p.estado = 'abierta' ORDER BY p.id`,
-    ).bind(simulacionId),
-    db.prepare('SELECT lado, simbolo, comision, deslizamiento, pnl_neto FROM operaciones WHERE simulacion_id = ? ORDER BY id')
-      .bind(simulacionId),
-    db.prepare(
-      `SELECT vela_1h, drawdown, drawdown_hodl, ultimo_hodl,
-         (SELECT vela_1h FROM capital WHERE simulacion_id = ? ORDER BY vela_1h LIMIT 1) AS primera
-       FROM capital WHERE simulacion_id = ? ORDER BY vela_1h DESC LIMIT 1`,
-    ).bind(simulacionId, simulacionId),
+  return [
     db.prepare(
       `SELECT vela_1h, valor_cartera, saldo, valor_hodl FROM capital
        WHERE simulacion_id = ? AND vela_1h >= (SELECT vela_1h FROM capital WHERE simulacion_id = ? ORDER BY vela_1h DESC LIMIT 1) - ?
@@ -472,6 +563,36 @@ export async function datosBot(db, simulacionId, horariaMs) {
            WHERE simulacion_id = l.s AND vela_1h >= dias.fin - l.d AND vela_1h < dias.fin ORDER BY vela_1h DESC LIMIT 1)
        WHERE c.vela_1h < l.corte`,
     ).bind(horariaMs, simulacionId, dia),
+  ]
+}
+
+/** Curva diaria (ordenada) seguida de la horaria. @param {{ results: any[] }} horaria @param {{ results: any[] }} diaria */
+const unirCurva = (horaria, diaria) => [...diaria.results.sort((a, b) => a.vela_1h - b.vela_1h), ...horaria.results]
+
+/**
+ * Todo lo que necesita GET /api/bot (1 llamada), con lecturas acotadas:
+ * - posiciones abiertas, cada una con `precio_actual` = precio de la última decisión con precio de su
+ *   moneda (búsqueda por el índice único de decisiones, no un recorrido de la historia);
+ * - operaciones (crecen con la actividad del bot, no con las horas);
+ * - el último punto de capital, con el resumen acumulado de la curva (core/metricas.js `ResumenCurva`);
+ * - la curva para la interfaz (lecturasCurva).
+ * @param {D1} db @param {number} simulacionId @param {number} horariaMs
+ */
+export async function datosBot(db, simulacionId, horariaMs) {
+  const [abiertas, operaciones, ultimo, horaria, diaria] = await db.batch([
+    db.prepare(
+      `SELECT p.*, (SELECT d.precio FROM decisiones d WHERE d.simulacion_id = p.simulacion_id AND d.simbolo = p.simbolo
+         AND d.precio IS NOT NULL ORDER BY d.vela_1h DESC LIMIT 1) AS precio_actual
+       FROM posiciones p WHERE p.simulacion_id = ? AND p.estado = 'abierta' ORDER BY p.id`,
+    ).bind(simulacionId),
+    db.prepare('SELECT lado, simbolo, comision, deslizamiento, pnl_neto FROM operaciones WHERE simulacion_id = ? ORDER BY id')
+      .bind(simulacionId),
+    db.prepare(
+      `SELECT vela_1h, drawdown, drawdown_hodl, ultimo_hodl,
+         (SELECT vela_1h FROM capital WHERE simulacion_id = ? ORDER BY vela_1h LIMIT 1) AS primera
+       FROM capital WHERE simulacion_id = ? ORDER BY vela_1h DESC LIMIT 1`,
+    ).bind(simulacionId, simulacionId),
+    ...lecturasCurva(db, simulacionId, horariaMs),
   ])
   const u = ultimo.results[0]
   /** @type {import('../../core/metricas.js').ResumenCurva} */
@@ -482,8 +603,31 @@ export async function datosBot(db, simulacionId, horariaMs) {
     abiertas: abiertas.results,
     operaciones: operaciones.results,
     resumenCurva,
-    curva: [...diaria.results.sort((a, b) => a.vela_1h - b.vela_1h), ...horaria.results],
+    curva: unirCurva(horaria, diaria),
   }
+}
+
+/**
+ * Lo que necesita GET /api/bot/comparativa de cada simulación, en 1 llamada (lote de 4 lecturas acotadas por
+ * simulación), en el orden de `ids`: el último punto de capital (valor, drawdown acumulado y los del HODL),
+ * el número de operaciones (índice operaciones(simulacion_id)) y la curva para la interfaz (lecturasCurva).
+ * @param {D1} db @param {number[]} ids @param {number} horariaMs
+ * @returns {Promise<{ ultimo: any|null, operaciones: number, curva: any[] }[]>}
+ */
+export async function datosComparativa(db, ids, horariaMs) {
+  if (ids.length === 0) return []
+  const resultados = await db.batch(ids.flatMap((id) => [
+    db.prepare(
+      `SELECT vela_1h, valor_cartera, valor_hodl, drawdown, drawdown_hodl, ultimo_hodl FROM capital
+       WHERE simulacion_id = ? ORDER BY vela_1h DESC LIMIT 1`,
+    ).bind(id),
+    db.prepare('SELECT COUNT(*) AS n FROM operaciones WHERE simulacion_id = ?').bind(id),
+    ...lecturasCurva(db, id, horariaMs),
+  ]))
+  return ids.map((_, i) => {
+    const [ultimo, operaciones, horaria, diaria] = resultados.slice(4 * i, 4 * i + 4)
+    return { ultimo: ultimo.results[0] ?? null, operaciones: /** @type {number} */ (operaciones.results[0].n), curva: unirCurva(horaria, diaria) }
+  })
 }
 
 /**

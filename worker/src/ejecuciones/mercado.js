@@ -7,9 +7,11 @@
 //   1 Fear & Greed + hasta 2 LLM (Groq y Gemini, solo con clave; Workers AI va por binding).
 // Fijas: 21-38. Lo que sobra hasta 50, con 1 de margen, es el presupuesto de reintentos de OKX, series enteras
 // por un hueco de la caché y respaldo de Bybit (este con reserva propia): como mucho 49.
-// Llamadas a D1: como mucho 19 (5 de ellas, un lote atómico por moneda; 2 de la caché).
+// Llamadas a D1 con n estrategias en vivo y m monedas: 10 + n × m (un lote atómico por moneda y simulación; 2 de
+// la caché; 1 que sincroniza las simulaciones; 2 que cargan el estado de todas, antes y después de operar; 1 con
+// el capital de todas) + n la primera hora (HODL). Con 5 monedas: 15-16 con 1 estrategia y 25-28 con 3
+// (el plan gratuito admite 50 consultas a D1 por invocación).
 import { valorCartera, valorHodl, velaDeDecision } from '../../../core/bot.js'
-import { ESTRATEGIA_ACTIVA, estrategia as obtenerEstrategia } from '../../../core/estrategias.js'
 import { ejecutarHora } from '../../../core/hora.js'
 import { HORA } from '../../../core/velas.js'
 import { CAPITAL_POR_DEFECTO, leerMonedas } from '../config.js'
@@ -19,6 +21,7 @@ import { explicarSenales, proveedores } from '../fuentes/llm.js'
 import { cambio24h, crearCliente, crearPresupuesto, ultimoCierre } from '../fuentes/okx.js'
 import { descargarSeries, planificarVelas, serializar } from '../fuentes/velas.js'
 import * as repo from '../repositorio.js'
+import { VIVO } from '../vivo.js'
 
 /** @typedef {import('../../../core/hora.js').EntradaMoneda} EntradaMoneda */
 /** @typedef {import('../../../core/hora.js').Estrategia} Estrategia */
@@ -105,36 +108,50 @@ export function enriquecerSenal(senal, entrada, ahora, explicacion, parametrosBo
 }
 
 /**
- * Paso horario del bot y persistencia: un lote atómico por moneda, después el punto de capital.
+ * Paso horario del bot de cada simulación activa y persistencia: un lote atómico por moneda y simulación, después
+ * un lote con el punto de capital de todas. Cada simulación usa su propia estrategia y su propio estado.
  * Si el lote de una moneda falla, las demás siguen: el saldo se mueve por deltas, así que lo que ya
  * entró es coherente y la moneda fallida se reintenta sola la hora siguiente (su progreso no avanzó).
+ * Llamadas a D1: 3 + simulaciones × monedas (+ 1 por simulación la primera hora, al fijar el HODL).
  * @param {import('../repositorio.js').D1} db
- * @param {{ sim: import('../repositorio.js').FilaSimulacion, est: Estrategia, entradas: EntradaMoneda[],
- *   titulares: import('../../../core/estrategia-v1.js').Titular[], fng: Fng|null, ahora: number }} datos
+ * @param {{ sims: import('../repositorio.js').FilaSimulacion[], estrategiaDe: (version: string) => Estrategia,
+ *   entradas: EntradaMoneda[], titulares: import('../../../core/estrategia-v1.js').Titular[], fng: Fng|null, ahora: number }} datos
+ * @returns {Promise<{ simulaciones: { id: number, version: string, senales: Senal[], operaciones: number, repetidas: string[] }[],
+ *   fallos: string[] }>}
+ *   fallos: con más de una simulación, cada uno lleva la versión delante («bot v2 ETH: …»).
  */
-export async function operar(db, { sim, est, entradas, titulares, fng, ahora }) {
+export async function operar(db, { sims, estrategiaDe, entradas, titulares, fng, ahora }) {
   /** @type {string[]} */
   const fallos = []
-  /** @type {string[]} */
-  const repetidas = []
-  let operaciones = 0
-  const { estado, hodl } = await repo.cargarEstado(db, sim, est.PARAMETROS_BOT)
-  const hora = ejecutarHora({
-    estado, hodl, capitalInicial: sim.capital_inicial, ahora, monedas: entradas, titulares, fng: fng?.valor ?? null, estrategia: est,
-  })
-  if (hodl === null && hora.hodl !== null) await repo.guardarHodl(db, sim.id, hora.hodl)
-  for (const [i, decision] of hora.decisiones.entries()) {
-    const eventos = hora.eventos.filter((e) => e.simbolo === decision.simbolo)
-    try {
-      await repo.guardarPasoMoneda(db, {
-        simulacionId: sim.id, version: sim.estrategia_version, decision, senal: hora.senales[i], eventos,
-        ultimaRevisada: hora.estado.ultimaRevisada[decision.simbolo], ahora,
-      })
-      operaciones += eventos.length
-    } catch (e) {
-      if (/UNIQUE constraint failed: decisiones/.test(mensaje(e))) repetidas.push(decision.simbolo)
-      else fallos.push(`bot ${decision.simbolo}: ${mensaje(e)}`)
+  const ids = sims.map((s) => s.id)
+  /** @param {string} version */
+  const parametrosDe = (version) => estrategiaDe(version).PARAMETROS_BOT
+  /** @param {import('../repositorio.js').FilaSimulacion} sim */
+  const prefijo = (sim) => (sims.length > 1 ? `${sim.estrategia_version} ` : '')
+  const simulaciones = []
+  for (const { sim, estado, hodl } of await repo.cargarEstados(db, ids, parametrosDe)) {
+    const est = estrategiaDe(sim.estrategia_version)
+    /** @type {string[]} */
+    const repetidas = []
+    let operaciones = 0
+    const hora = ejecutarHora({
+      estado, hodl, capitalInicial: sim.capital_inicial, ahora, monedas: entradas, titulares, fng: fng?.valor ?? null, estrategia: est,
+    })
+    if (hodl === null && hora.hodl !== null) await repo.guardarHodl(db, sim.id, hora.hodl)
+    for (const [i, decision] of hora.decisiones.entries()) {
+      const eventos = hora.eventos.filter((e) => e.simbolo === decision.simbolo)
+      try {
+        await repo.guardarPasoMoneda(db, {
+          simulacionId: sim.id, version: sim.estrategia_version, decision, senal: hora.senales[i], eventos,
+          ultimaRevisada: hora.estado.ultimaRevisada[decision.simbolo], ahora,
+        })
+        operaciones += eventos.length
+      } catch (e) {
+        if (/UNIQUE constraint failed: decisiones/.test(mensaje(e))) repetidas.push(decision.simbolo)
+        else fallos.push(`bot ${prefijo(sim)}${decision.simbolo}: ${mensaje(e)}`)
+      }
     }
+    simulaciones.push({ id: sim.id, version: sim.estrategia_version, senales: hora.senales, operaciones, repetidas, hodl: hora.hodl })
   }
 
   /** @type {Record<string, number>} */
@@ -143,14 +160,16 @@ export async function operar(db, { sim, est, entradas, titulares, fng, ahora }) 
     const p = ultimoCierre(e.velasEur, ahora)
     if (p !== null) precios[e.simbolo] = p
   }
-  const simFinal = /** @type {import('../repositorio.js').FilaSimulacion} */ (await repo.obtenerSimulacion(db, sim.id))
-  const { estado: final } = await repo.cargarEstado(db, simFinal, est.PARAMETROS_BOT)
-  const sinPrecio = Object.keys(final.posiciones).filter((s) => !(s in precios))
-  if (sinPrecio.length > 0) {
-    fallos.push(`capital: sin precio EUR de ${sinPrecio.join(', ')}`)
-  } else {
-    const hodlFinal = hora.hodl
-    await repo.guardarCapital(db, {
+  /** @type {import('../repositorio.js').PuntoCapital[]} */
+  const puntos = []
+  for (const [i, { sim, estado: final }] of (await repo.cargarEstados(db, ids, parametrosDe)).entries()) {
+    const sinPrecio = Object.keys(final.posiciones).filter((s) => !(s in precios))
+    if (sinPrecio.length > 0) {
+      fallos.push(`capital${sims.length > 1 ? ` ${sim.estrategia_version}` : ''}: sin precio EUR de ${sinPrecio.join(', ')}`)
+      continue
+    }
+    const hodlFinal = simulaciones[i].hodl
+    puntos.push({
       simulacionId: sim.id,
       vela: velaDeDecision(ahora),
       valorCartera: valorCartera(final, precios),
@@ -158,17 +177,20 @@ export async function operar(db, { sim, est, entradas, titulares, fng, ahora }) 
       valorHodl: hodlFinal && Object.keys(hodlFinal).every((s) => s in precios) ? valorHodl(hodlFinal, precios) : null,
     })
   }
-  return { senales: hora.senales, fallos, repetidas, operaciones }
+  await repo.guardarCapitales(db, puntos)
+  return { simulaciones: simulaciones.map(({ hodl: _, ...s }) => s), fallos }
 }
 
 /**
  * @param {{ env: { DB: import('../repositorio.js').D1, MONEDAS?: string } & import('../fuentes/llm.js').EntornoLlm,
- *   fetch: typeof globalThis.fetch, ahora: number, manual?: boolean, idEjecucion?: number, esperar?: (ms: number) => Promise<void> }} deps
- *   manual: true para POST /api/analizar (refresca señales; nunca crea simulaciones ni opera).
+ *   fetch: typeof globalThis.fetch, ahora: number, manual?: boolean, idEjecucion?: number, esperar?: (ms: number) => Promise<void>,
+ *   vivo?: import('../vivo.js').Vivo }} deps
+ *   manual: true para POST /api/analizar (refresca señales con la estrategia principal; nunca crea simulaciones ni opera).
  *   idEjecucion: fila de ejecuciones ya reservada (repo.reservarManual); si no viene, se crea.
  *   esperar: pausas del límite de ritmo de OKX (por defecto, setTimeout).
+ *   vivo: estrategias en vivo (por defecto, las de core/estrategias.js).
  */
-export async function ejecutarMercado({ env, fetch: fetchExterno, ahora, manual = false, idEjecucion, esperar }) {
+export async function ejecutarMercado({ env, fetch: fetchExterno, ahora, manual = false, idEjecucion, esperar, vivo = VIVO }) {
   const db = env.DB
   let subpeticiones = 0
   /** @type {typeof globalThis.fetch} */
@@ -182,34 +204,35 @@ export async function ejecutarMercado({ env, fetch: fetchExterno, ahora, manual 
   const fallos = []
   /** @type {string[]} */
   let repetidas = []
+  /** @type {{ id: number, version: string, operaciones: number, repetidas: string[] }[]} */
+  let resumenSims = []
   try {
     const monedas = leerMonedas(env.MONEDAS)
-    let sim = await repo.simulacionActiva(db)
-    if (!sim && !manual) sim = await repo.crearSimulacion(db, { capitalInicial: CAPITAL_POR_DEFECTO, version: ESTRATEGIA_ACTIVA, ahora })
-    const est = obtenerEstrategia(sim?.estrategia_version ?? ESTRATEGIA_ACTIVA)
+    const sims = manual ? [] : await repo.sincronizarSimulaciones(db, { versiones: vivo.versiones, capitalInicial: CAPITAL_POR_DEFECTO, ahora })
+    const principal = vivo.estrategia(vivo.principal)
     const llmExternos = proveedores(env, fetch).filter((p) => p.motor !== 'cf').length
     const datos = await recogerDatos({ db, fetch, monedas, ahora, esperar, llmExternos })
     fallos.push(...datos.fallos)
     const titulares = await repo.titularesParaEstrategia(db, ahora - 24 * HORA, ahora)
-    const fngValor = datos.fng?.valor ?? null
     /** @type {Senal[]} */
     let senales
     let operaciones = 0
-    if (manual || !sim) {
-      senales = datos.entradas.map((e) => est.calcularSenal({
-        simbolo: e.simbolo, ahora, velas: e.velas, derivados: e.derivados, titulares, fng: fngValor,
+    if (manual) {
+      senales = datos.entradas.map((e) => principal.calcularSenal({
+        simbolo: e.simbolo, ahora, velas: e.velas, derivados: e.derivados, titulares, fng: datos.fng?.valor ?? null,
       }))
     } else {
-      const r = await operar(db, { sim, est, entradas: datos.entradas, titulares, fng: datos.fng, ahora })
-      senales = r.senales
+      const r = await operar(db, { sims, estrategiaDe: vivo.estrategia, entradas: datos.entradas, titulares, fng: datos.fng, ahora })
       fallos.push(...r.fallos)
-      repetidas = r.repetidas
-      operaciones = r.operaciones
+      resumenSims = r.simulaciones.map(({ senales: _, ...s }) => s)
+      senales = /** @type {NonNullable<typeof r.simulaciones[number]>} */ (r.simulaciones.find((s) => s.version === vivo.principal)).senales
+      repetidas = [...new Set(r.simulaciones.flatMap((s) => s.repetidas))]
+      operaciones = r.simulaciones.reduce((n, s) => n + s.operaciones, 0)
     }
-    // El LLM va después del bot: si tarda o falla, las operaciones ya están guardadas.
+    // El LLM va después del bot (si tarda o falla, las operaciones ya están guardadas) y solo para la principal.
     const { textos, fallos: fallosLlm } = await explicarSenales({ env, fetch, senales })
     fallos.push(...fallosLlm)
-    const enriquecidas = senales.map((s, i) => enriquecerSenal(s, datos.entradas[i], ahora, textos[s.simbolo], est.PARAMETROS_BOT))
+    const enriquecidas = senales.map((s, i) => enriquecerSenal(s, datos.entradas[i], ahora, textos[s.simbolo], principal.PARAMETROS_BOT))
     await repo.guardarSenales(db, enriquecidas.map((s) => ({
       simbolo: s.simbolo, calculadaEn: ahora, vela1h: s.vela1h ?? velaDeDecision(ahora), senal: s,
     })))
@@ -218,15 +241,16 @@ export async function ejecutarMercado({ env, fetch: fetchExterno, ahora, manual 
       fin,
       ok: true,
       detalle: {
-        fallos, repetidas, operaciones, simulacionId: sim?.id ?? null, fng: datos.fng, reintentosOkx: datos.reintentosOkx,
+        fallos, repetidas, operaciones, simulacionId: sims.find((s) => s.estrategia_version === vivo.principal)?.id ?? null,
+        simulaciones: resumenSims, estrategiaPrincipal: vivo.principal, fng: datos.fng, reintentosOkx: datos.reintentosOkx,
         limitadasOkx: datos.limitadasOkx, velasBybit: datos.velasBybit, subpeticiones,
       },
     })
-    return { ejecucion: { id, tipo, inicio: ahora, fin, ok: true, fallos }, senales: enriquecidas, repetidas, operaciones }
+    return { ejecucion: { id, tipo, inicio: ahora, fin, ok: true, fallos }, senales: enriquecidas, repetidas, operaciones, simulaciones: resumenSims }
   } catch (e) {
     const error = mensaje(e)
     const fin = Date.now()
     await repo.finalizarEjecucion(db, id, { fin, ok: false, detalle: { fallos, repetidas, error } })
-    return { ejecucion: { id, tipo, inicio: ahora, fin, ok: false, fallos }, senales: [], repetidas, operaciones: 0, error }
+    return { ejecucion: { id, tipo, inicio: ahora, fin, ok: false, fallos }, senales: [], repetidas, operaciones: 0, simulaciones: resumenSims, error }
   }
 }

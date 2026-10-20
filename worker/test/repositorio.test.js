@@ -55,14 +55,15 @@ async function recorrer(db, n) {
 const filas = async (db, sql, ...valores) => (await db.prepare(sql).bind(...valores).all()).results
 
 describe('simulaciones', () => {
-  test('crear cierra la activa anterior (sin borrar nada) y abre otra con su versión y capital', async () => {
+  test('crear cierra la activa anterior de su estrategia (sin borrar nada) y abre otra con su versión y capital', async () => {
     const db = crearD1()
     const a = await crearSimulacion(db, { capitalInicial: 10_000, version: 'v1', ahora: 100 })
     assert.equal(a.activa, 1)
     assert.equal(a.saldo, 10_000)
     assert.equal(a.hodl_json, null)
-    const b = await crearSimulacion(db, { capitalInicial: 5_000, version: 'v2', ahora: 200 })
-    assert.deepEqual(await simulacionActiva(db), b)
+    const b = await crearSimulacion(db, { capitalInicial: 5_000, version: 'v1', ahora: 200 })
+    assert.deepEqual(await simulacionActiva(db, 'v1'), b)
+    assert.equal(await simulacionActiva(db, 'v2'), null)
     assert.deepEqual(await obtenerSimulacion(db, a.id), { ...a, activa: 0, cerrada_en: 200 })
     assert.deepEqual((await listarSimulaciones(db)).map((s) => s.id), [b.id, a.id])
     assert.equal(await obtenerSimulacion(db, 99), null)

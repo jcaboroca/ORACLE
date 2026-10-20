@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
-import { ESTRATEGIAS, ESTRATEGIA_ACTIVA } from '../../core/estrategias.js'
+import { ESTRATEGIAS } from '../../core/estrategias.js'
 import { CAPITAL_MAXIMO as MAX_WORKER, CAPITAL_MINIMO as MIN_WORKER } from '../../worker/src/api.js'
 import { crearApi } from '../../js/api.js'
 import {
@@ -89,7 +89,7 @@ describe('bot en la interfaz', () => {
     await api.reiniciar(2500)
     const opciones = opcionesSimulacion((await api.simulaciones()).items)
     assert.deepEqual(opciones.map((o) => o.valor), ['2', '1'])
-    assert.match(opciones[0].texto, new RegExp(`^Simulación 2 · ${ESTRATEGIA_ACTIVA} · 2500,00${ESP}€ · activa desde \\d\\d/\\d\\d/\\d{4}$`))
+    assert.match(opciones[0].texto, new RegExp(`^Simulación 2 · v1 · 2500,00${ESP}€ · activa desde \\d\\d/\\d\\d/\\d{4}$`))
     assert.match(opciones[1].texto, /^Simulación 1 · v1 · 10\.000,00\s€ · cerrada el \d\d\/\d\d\/\d{4}$/)
   })
 

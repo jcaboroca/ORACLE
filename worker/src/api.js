@@ -1,14 +1,15 @@
 // @ts-check
-// API JSON del Worker (spec §11). Contrato exacto de cada respuesta: sección «Contrato de la API» del plan 2.
+// API JSON del Worker (spec §11). Contrato exacto de cada respuesta: sección «Contrato de la API» del plan 2,
+// con los cambios del plan 5 (varias estrategias en vivo y GET /api/bot/comparativa).
 // Precios e importes en €, porcentajes como fracción (0,05 = 5 %), instantes en ms desde epoch (UTC).
 // No existe ninguna ruta que envíe órdenes a un exchange.
-import { ESTRATEGIA_ACTIVA } from '../../core/estrategias.js'
 import { calcularMetricas, metricasPorMoneda } from '../../core/metricas.js'
 import { HORA } from '../../core/velas.js'
 import { cabecerasCors, leerOrigenes, verificarPin } from './auth.js'
 import { leerMonedas } from './config.js'
 import { ejecutarMercado } from './ejecuciones/mercado.js'
 import * as repo from './repositorio.js'
+import { VIVO, etiquetaDe } from './vivo.js'
 
 export const TAMANO_PAGINA = 50
 export const DECISIONES_MONEDA = 48
@@ -36,17 +37,22 @@ export class ErrorApi extends Error {
 
 /**
  * @typedef {{ env: { DB: repo.D1, ORACLE_PIN?: string, MONEDAS?: string, ORIGENES?: string } & import('./fuentes/llm.js').EntornoLlm,
- *   fetch: typeof fetch, ahora: number, esperar?: (ms: number) => Promise<void> }} Deps
- * @typedef {Deps & { url: URL, peticion: Request, params: string[] }} Contexto
+ *   fetch: typeof fetch, ahora: number, esperar?: (ms: number) => Promise<void>, vivo?: import('./vivo.js').Vivo }} Deps
+ *   vivo: estrategias en vivo (por defecto, las de core/estrategias.js; los tests inyectan otras).
+ * @typedef {Deps & { url: URL, peticion: Request, params: string[], vivo: import('./vivo.js').Vivo }} Contexto
  * @typedef {{ estado?: number, cuerpo: unknown }} Respuesta
  */
 
 // ── Conversión de filas a JSON de la API ────────────────────────────────────
 
-/** @param {repo.FilaSimulacion} s */
-export const aSimulacion = (s) => ({
+/**
+ * principal: activa y de la estrategia principal (la del consejo del Panel); etiqueta: nombre de la estrategia.
+ * @param {repo.FilaSimulacion} s @param {import('./vivo.js').Vivo} vivo
+ */
+export const aSimulacion = (s, vivo) => ({
   id: s.id, creadaEn: s.creada_en, cerradaEn: s.cerrada_en, activa: s.activa === 1,
-  estrategiaVersion: s.estrategia_version, capitalInicial: s.capital_inicial, saldo: s.saldo,
+  estrategiaVersion: s.estrategia_version, etiqueta: etiquetaDe(vivo, s.estrategia_version),
+  principal: s.activa === 1 && s.estrategia_version === vivo.principal, capitalInicial: s.capital_inicial, saldo: s.saldo,
 })
 
 /** Primera frase de un texto (hasta . ! o ? seguido de espacio o fin). @param {string} texto */
@@ -137,10 +143,13 @@ function simboloOpcional(url) {
   return s
 }
 
-/** Simulación de ?simulacion= o, si no viene, la activa. @param {repo.D1} db @param {URL} url */
-async function simulacionPedida(db, url) {
+/**
+ * Simulación de ?simulacion= o, si no viene, la activa de la estrategia principal.
+ * @param {repo.D1} db @param {URL} url @param {import('./vivo.js').Vivo} vivo
+ */
+async function simulacionPedida(db, url, vivo) {
   const id = entero(url, 'simulacion')
-  const sim = id === null ? await repo.simulacionActiva(db) : await repo.obtenerSimulacion(db, id)
+  const sim = id === null ? await repo.simulacionActiva(db, vivo.principal) : await repo.obtenerSimulacion(db, id)
   if (!sim) throw new ErrorApi(404, 'no_encontrado', id === null ? 'No hay simulación activa' : `No existe la simulación ${id}`)
   return sim
 }
@@ -164,10 +173,10 @@ async function salud({ env, ahora }) {
 }
 
 /** @param {Contexto} c @returns {Promise<Respuesta>} */
-async function resumen({ env, ahora }) {
+async function resumen({ env, ahora, vivo }) {
   const db = env.DB
   const [guardadas, fng, sim, ultimaEjecucion, ultimaNoticias] = await Promise.all([
-    repo.senalesActuales(db), repo.ultimoFng(db), repo.simulacionActiva(db),
+    repo.senalesActuales(db), repo.ultimoFng(db), repo.simulacionActiva(db, vivo.principal),
     repo.ultimaEjecucion(db, ['mercado', 'manual']), repo.ultimaEjecucion(db, ['noticias']),
   ])
   const senales = leerMonedas(env.MONEDAS).filter((m) => guardadas[m]).map((m) => aSenalResumen(guardadas[m]))
@@ -186,15 +195,18 @@ async function resumen({ env, ahora }) {
   }
   const datosDesactualizados = senales.length === 0
     || senales.some((s) => !s.fresca || ahora - s.calculadaEn > DATOS_VIEJOS_MS)
-  return { cuerpo: { ahora, senales, fng, bot, ultimaEjecucion, ultimaNoticias, datosDesactualizados } }
+  const estrategiaPrincipal = {
+    version: vivo.principal, etiqueta: etiquetaDe(vivo, vivo.principal), enVivo: vivo.versiones.length,
+  }
+  return { cuerpo: { ahora, estrategiaPrincipal, senales, fng, bot, ultimaEjecucion, ultimaNoticias, datosDesactualizados } }
 }
 
 /** @param {Contexto} c @returns {Promise<Respuesta>} */
-async function moneda({ env, ahora, params }) {
+async function moneda({ env, ahora, params, vivo }) {
   const db = env.DB
   const simbolo = params[0].toUpperCase()
   if (!leerMonedas(env.MONEDAS).includes(simbolo)) throw new ErrorApi(404, 'no_encontrado', `Moneda no seguida: ${simbolo}`)
-  const [guardadas, sim] = await Promise.all([repo.senalesActuales(db), repo.simulacionActiva(db)])
+  const [guardadas, sim] = await Promise.all([repo.senalesActuales(db), repo.simulacionActiva(db, vivo.principal)])
   const senal = guardadas[simbolo] ?? null
   const hasta = senal?.calculadaEn ?? ahora
   const usados = new Set(Array.isArray(senal?.detalle?.noticias) ? senal.detalle.noticias : [])
@@ -211,8 +223,8 @@ async function moneda({ env, ahora, params }) {
 }
 
 /** @param {Contexto} c @returns {Promise<Respuesta>} */
-async function bot({ env, url }) {
-  const sim = await simulacionPedida(env.DB, url)
+async function bot({ env, url, vivo }) {
+  const sim = await simulacionPedida(env.DB, url, vivo)
   const d = await repo.datosBot(env.DB, sim.id, CURVA_HORARIA_MS)
   const abiertas = d.abiertas.map((p) => aPosicion(p, p.precio_actual ?? p.precio_entrada))
   const operaciones = d.operaciones.map((o) => ({
@@ -226,15 +238,15 @@ async function bot({ env, url }) {
   })
   return {
     cuerpo: {
-      simulacion: aSimulacion(sim), metricas, porMoneda: metricasPorMoneda(operaciones), abiertas,
+      simulacion: aSimulacion(sim, vivo), metricas, porMoneda: metricasPorMoneda(operaciones), abiertas,
       curva: limitarCurva(curva), hodl: sim.hodl_json ? JSON.parse(sim.hodl_json) : null,
     },
   }
 }
 
 /** @param {'decisiones'|'operaciones'} tabla */
-const paginada = (tabla) => /** @param {Contexto} c @returns {Promise<Respuesta>} */ async ({ env, url }) => {
-  const sim = await simulacionPedida(env.DB, url)
+const paginada = (tabla) => /** @param {Contexto} c @returns {Promise<Respuesta>} */ async ({ env, url, vivo }) => {
+  const sim = await simulacionPedida(env.DB, url, vivo)
   const { filas, siguienteCursor } = await repo.pagina(env.DB, tabla, {
     simulacionId: sim.id, simbolo: simboloOpcional(url), cursor: entero(url, 'cursor'), limite: TAMANO_PAGINA,
   })
@@ -242,24 +254,60 @@ const paginada = (tabla) => /** @param {Contexto} c @returns {Promise<Respuesta>
 }
 
 /** @param {Contexto} c @returns {Promise<Respuesta>} */
-async function simulaciones({ env }) {
-  return { cuerpo: { items: (await repo.listarSimulaciones(env.DB)).map(aSimulacion) } }
+async function simulaciones({ env, vivo }) {
+  return { cuerpo: { items: (await repo.listarSimulaciones(env.DB)).map((s) => aSimulacion(s, vivo)) } }
 }
 
-/** @param {Contexto} c @returns {Promise<Respuesta>} */
-async function reiniciar({ env, ahora, peticion }) {
+/**
+ * Comparativa de las simulaciones activas, en el orden de las estrategias en vivo: valor, rentabilidad, caída
+ * máxima, operaciones y curva (submuestreada como la de GET /api/bot) de cada una, más la curva de comprar y
+ * mantener de la principal (todas empiezan con el mismo capital en el mismo instante). Sin simulaciones activas
+ * (antes del primer cron), listas vacías.
+ * @param {Contexto} c @returns {Promise<Respuesta>}
+ */
+async function comparativa({ env, ahora, vivo }) {
+  const activas = await repo.simulacionesActivas(env.DB)
+  const sims = vivo.versiones.flatMap((v) => activas.filter((s) => s.estrategia_version === v))
+  const datos = await repo.datosComparativa(env.DB, sims.map((s) => s.id), CURVA_HORARIA_MS)
+  const simulaciones = sims.map((sim, i) => {
+    const { ultimo, operaciones, curva } = datos[i]
+    const valorCartera = ultimo ? ultimo.valor_cartera : sim.saldo
+    return {
+      id: sim.id, estrategiaVersion: sim.estrategia_version, etiqueta: etiquetaDe(vivo, sim.estrategia_version),
+      principal: sim.estrategia_version === vivo.principal, capitalInicial: sim.capital_inicial, valorCartera,
+      rentabilidad: valorCartera / sim.capital_inicial - 1, drawdownMaximo: ultimo ? ultimo.drawdown : 0, operaciones,
+      curva: limitarCurva(curva.map((c) => ({ t: c.vela_1h, valor: c.valor_cartera }))),
+    }
+  })
+  const i = sims.findIndex((s) => s.estrategia_version === vivo.principal)
+  const base = i === -1 ? null : { sim: sims[i], ...datos[i] }
+  const ultimoHodl = base?.ultimo?.ultimo_hodl ?? null
+  const hodl = base ? limitarCurva(base.curva.filter((c) => c.valor_hodl !== null).map((c) => ({ t: c.vela_1h, valor: c.valor_hodl }))) : []
+  const resumenHodl = base && ultimoHodl !== null
+    ? { valor: ultimoHodl, rentabilidad: ultimoHodl / base.sim.capital_inicial - 1, drawdownMaximo: base.ultimo.drawdown_hodl }
+    : null
+  return { cuerpo: { ahora, simulaciones, hodl, resumenHodl } }
+}
+
+/**
+ * Reinicia el bot: cierra todas las simulaciones activas (se conservan) y abre una por cada estrategia en vivo,
+ * todas con el capital pedido. `simulacion` es la nueva de la principal; `simulaciones`, todas las nuevas.
+ * @param {Contexto} c @returns {Promise<Respuesta>}
+ */
+async function reiniciar({ env, ahora, peticion, vivo }) {
   const cuerpo = await cuerpoJson(peticion)
   if (cuerpo?.confirmar !== true) throw new ErrorApi(400, 'peticion_invalida', 'Falta confirmar: true')
   const capital = cuerpo.capital_inicial
   if (typeof capital !== 'number' || !Number.isFinite(capital) || capital < CAPITAL_MINIMO || capital > CAPITAL_MAXIMO) {
     throw new ErrorApi(400, 'peticion_invalida', `capital_inicial debe ser un número entre ${CAPITAL_MINIMO} y ${CAPITAL_MAXIMO}`)
   }
-  const sim = await repo.crearSimulacion(env.DB, { capitalInicial: capital, version: ESTRATEGIA_ACTIVA, ahora })
-  return { estado: 201, cuerpo: { simulacion: aSimulacion(sim) } }
+  const nuevas = await repo.reiniciarSimulaciones(env.DB, { capitalInicial: capital, versiones: vivo.versiones, ahora })
+  const principal = /** @type {repo.FilaSimulacion} */ (nuevas.find((s) => s.estrategia_version === vivo.principal))
+  return { estado: 201, cuerpo: { simulacion: aSimulacion(principal, vivo), simulaciones: nuevas.map((s) => aSimulacion(s, vivo)) } }
 }
 
 /** @param {Contexto} c @returns {Promise<Respuesta>} */
-async function analizar({ env, fetch, ahora, esperar }) {
+async function analizar({ env, fetch, ahora, esperar, vivo }) {
   const id = await repo.reservarManual(env.DB, ahora, ESPERA_ANALIZAR_MS)
   if (id === null) {
     const previa = await repo.ultimaEjecucion(env.DB, ['manual'])
@@ -267,7 +315,7 @@ async function analizar({ env, fetch, ahora, esperar }) {
       hasta: (previa?.inicio ?? ahora) + ESPERA_ANALIZAR_MS,
     })
   }
-  const r = await ejecutarMercado({ env, fetch, ahora, manual: true, idEjecucion: id, esperar })
+  const r = await ejecutarMercado({ env, fetch, ahora, manual: true, idEjecucion: id, esperar, vivo })
   if (!r.ejecucion.ok) throw new ErrorApi(502, 'analisis_fallido', r.error ?? 'El análisis falló')
   return { cuerpo: { senales: r.senales.map(aSenalResumen), ejecucion: r.ejecucion } }
 }
@@ -278,6 +326,7 @@ const RUTAS = [
   { metodo: 'GET', patron: /^\/api\/resumen$/, manejar: resumen },
   { metodo: 'GET', patron: /^\/api\/moneda\/([A-Za-z0-9]{2,10})$/, manejar: moneda },
   { metodo: 'GET', patron: /^\/api\/bot$/, manejar: bot },
+  { metodo: 'GET', patron: /^\/api\/bot\/comparativa$/, manejar: comparativa },
   { metodo: 'GET', patron: /^\/api\/bot\/operaciones$/, manejar: paginada('operaciones') },
   { metodo: 'GET', patron: /^\/api\/bot\/decisiones$/, manejar: paginada('decisiones') },
   { metodo: 'GET', patron: /^\/api\/simulaciones$/, manejar: simulaciones },
@@ -310,7 +359,7 @@ export async function atender(peticion, deps) {
       if (!pin.ok) return responder(pin.cuerpo, pin.estado)
     }
     const params = /** @type {RegExpExecArray} */ (ruta.patron.exec(url.pathname)).slice(1)
-    const r = await ruta.manejar({ ...deps, url, peticion, params })
+    const r = await ruta.manejar({ ...deps, vivo: deps.vivo ?? VIVO, url, peticion, params })
     return responder(r.cuerpo, r.estado ?? 200)
   } catch (e) {
     if (e instanceof ErrorApi) return responder({ error: e.codigo, detalle: e.message, ...e.extra }, e.estado)
