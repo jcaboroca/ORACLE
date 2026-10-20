@@ -27,18 +27,45 @@ y `calcularSenal`) registrado en `core/estrategias.js`. Cada simulación guarda 
 
 | Versión | Qué hace | Estado |
 |---|---|---|
-| `v1` | Puntuación técnica + derivados + noticias + Fear & Greed; decide cada hora | **Activa** |
-| `v2` | La señal de v1 + solo compra con el cierre diario sobre la EMA200 diaria; decide una vez al día (00:03 UTC); los stops se siguen revisando cada hora | Disponible, no activa |
+| `v1` | Puntuación técnica + derivados + noticias + Fear & Greed; decide cada hora | Disponible |
+| `v2` | La señal de v1 + solo compra con el cierre diario sobre la EMA200 diaria; decide una vez al día (00:03 UTC); los stops se siguen revisando cada hora | Disponible |
+| `v3` | Laboratorio F3 Momentum: compra si la moneda sube en 30 días y vende si no; revisa los lunes (00:03 UTC), sin stop ni take-profit | **En vivo, principal y activa** |
+| `v4` | Laboratorio F1 Cruce de medias: EMA10 > EMA50 diarias; decide cada día, sin stop ni take-profit | En vivo, **experimental** |
+| `v5` | Laboratorio F2 Ruptura: compra al superar el máximo de 20 días y vende bajo el mínimo de 20 días | En vivo, **experimental** |
+
+`core/estrategias.js` exporta `ESTRATEGIAS_EN_VIVO = ['v3', 'v4', 'v5']` (una simulación por cada una) y
+`ESTRATEGIA_PRINCIPAL = 'v3'` (la que da el consejo del Panel; `ESTRATEGIA_ACTIVA` es la misma).
 
 v2 se eligió con un protocolo walk-forward (entrenamiento 2022-10 → 2024-10, prueba 2024-10 →
 2026-10) y **no superó a v1 en el periodo de prueba** (−23,1 % frente a −18,5 % con la ventana
-de 299 velas; comprar y mantener: +23,3 %), así que v1 sigue activa. Detalle, tabla y limitaciones en la spec §6.6.
-Ninguna de las dos bate a comprar y mantener en el histórico: no es garantía de nada.
+de 299 velas; comprar y mantener: +23,3 %). Detalle, tabla y limitaciones en la spec §6.6.
+
+v3–v5 salen del **laboratorio de estrategias** (abajo): v3 es la única familia que cumple el criterio
+de «estrategia ganadora» fuera de muestra 2020–2025 (+2.895 % con 38,7 % de caída máxima, frente a
++4.715 % y 78,0 % de comprar y mantener); v4 y v5 son las siguientes del ranking y **no** lo cumplen. En el
+tramo reservado (2026) las tres pierden (−11,0 %, −2,2 % y −9,2 %), menos que comprar y mantener
+(−16,3 %). Ninguna bate a comprar y mantener en rentabilidad: lo que reducen es la caída. Resultados y
+limitaciones en la [spec del laboratorio §9](docs/superpowers/specs/2026-10-20-oracle-laboratorio-design.md).
+
+## Laboratorio de estrategias
+
+```bash
+npm run laboratorio                          # todo el histórico disponible hasta la hora actual
+npm run laboratorio -- --hasta 2026-10-20    # fijando el final de los datos
+```
+
+Descarga las velas 1H/4H/1D USDT de Binance de BTC, ETH, SOL, BNB y XRP desde que cotiza cada par y el
+histórico de Fear & Greed (caché por años en `scripts/.cache/`; la primera vez tarda ~3 min), prueba las
+66 configuraciones de 5 familias (`core/familias/`) con validación anclada por años (prueba 2020–2025,
+tramo reservado desde 2026-01-01) en `core/laboratorio.js` y escribe `data/laboratorio.json` (ranking,
+criterio punto por punto, resultados por año y por moneda, meseta, selección y tramo reservado). El
+cálculo tarda menos de un minuto. Si cambia la selección, las estrategias desplegables v3–v5 no se tocan
+solas: cualquier cambio exige versiones nuevas (el test de `test/estrategias.test.js` avisa).
 
 ## Backtest
 
 ```bash
-npm run backtest                                   # estrategia activa, últimos 2 años, 5 monedas
+npm run backtest                                   # estrategia activa (v3), últimos 2 años, 5 monedas
 npm run backtest -- --estrategia v2                # otra estrategia registrada
 npm run backtest -- --desde 2025-01-01 --hasta 2026-01-01 --monedas BTC,ETH --capital 5000
 ```
