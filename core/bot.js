@@ -32,10 +32,12 @@ import { HORA, cerradasHasta } from './velas.js'
 /**
  * @typedef {{ comision: number, deslizamiento: number, confianzaMinima: number, fraccionPosicion: number,
  *   ordenMinima: number, multStopLoss: number, multTakeProfit: number, enfriamientoHoras: number,
- *   cadenciaHoras?: number }} ParametrosBot
+ *   cadenciaHoras?: number, sinStopLoss?: boolean, sinTakeProfit?: boolean }} ParametrosBot
  * cadenciaHoras (opcional, por defecto 1): solo se decide sobre velas que cierran en una hora UTC
  * múltiplo de la cadencia (4 → cierres de vela 4H; 24 → cierre diario). Debe dividir a 24.
  * Fuera de esa ventana la decisión es 'fuera_de_ventana'; los stops se revisan igualmente cada hora.
+ * sinStopLoss / sinTakeProfit (opcionales, por defecto false): la posición se abre con un nivel finito
+ * inalcanzable (FACTOR_SIN_STOP / FACTOR_SIN_TP × precio de entrada) en lugar del múltiplo de ATR.
  */
 
 /** Parámetros por defecto (los de la estrategia v1). Cada estrategia publica los suyos. */
@@ -49,6 +51,25 @@ export const PARAMETROS_BOT = Object.freeze({
   multTakeProfit: 2.5,
   enfriamientoHoras: 4,
 })
+
+/** Stop-loss que nunca salta: la base de datos exige un valor finito (stop_loss NOT NULL). */
+export const FACTOR_SIN_STOP = 1e-6
+/** Take-profit inalcanzable: la base de datos exige un valor finito (take_profit NOT NULL). */
+export const FACTOR_SIN_TP = 1e6
+
+/**
+ * Niveles de salida que se fijan al abrir y ya no cambian.
+ * @param {number} precioEntrada
+ * @param {number|null} atrPct ATR de la señal en fracción del precio (no se usa si el nivel está desactivado)
+ * @param {ParametrosBot} p
+ */
+export function nivelesSalida(precioEntrada, atrPct, p) {
+  const atr = /** @type {number} */ (atrPct)
+  return {
+    stopLoss: p.sinStopLoss ? precioEntrada * FACTOR_SIN_STOP : precioEntrada * (1 - p.multStopLoss * atr),
+    takeProfit: p.sinTakeProfit ? precioEntrada * FACTOR_SIN_TP : precioEntrada * (1 + p.multTakeProfit * atr),
+  }
+}
 
 /** @param {number} capital @returns {Estado} */
 export function estadoInicial(capital) {
@@ -172,15 +193,13 @@ export function pasoMoneda(estadoPrevio, { simbolo, velasEur: todasEur, senal, a
   const importe = Math.min(p.fraccionPosicion * valor, estado.saldo)
   if (importe < p.ordenMinima) return { estado, eventos, decision: decidir('ninguna', 'saldo_insuficiente') }
 
-  const atrPct = /** @type {number} */ (senal.atrPct)
   const precioEntrada = ultima.cierre * (1 + p.deslizamiento)
   const comision = importe * p.comision
   const unidades = (importe - comision) / precioEntrada
   /** @type {Posicion} */
   const nueva = {
     simbolo, velaEntrada: ultima.inicio, precioEntrada, unidades, coste: importe,
-    stopLoss: precioEntrada * (1 - p.multStopLoss * atrPct),
-    takeProfit: precioEntrada * (1 + p.multTakeProfit * atrPct),
+    ...nivelesSalida(precioEntrada, senal.atrPct, p),
   }
   estado.saldo -= importe
   estado.posiciones[simbolo] = nueva
