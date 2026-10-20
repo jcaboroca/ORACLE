@@ -5,7 +5,7 @@ import { ejecutarBacktest } from '../core/backtest.js'
 import { familia } from '../core/familias/index.js'
 import {
   CRITERIO, cociente, elegir, encadenar, evaluarCriterio, evaluarLaboratorio, mediana, meseta, precalcularSenales,
-  prepararDatos, simular, simularHodl, tramosDelLaboratorio,
+  prepararDatos, seleccionar, simular, simularHodl, tramosDelLaboratorio,
 } from '../core/laboratorio.js'
 import { HORA } from '../core/velas.js'
 
@@ -151,6 +151,17 @@ describe('laboratorio: piezas puras', () => {
     assert.equal(meseta(-1, [0, 0]).cumple, false)
     assert.equal(meseta(1, []).cumple, false)
   })
+  test('selección: primero las que cumplen; si son menos de 3, las siguientes del ranking como experimentales', () => {
+    /** @param {string} familia @param {boolean} cumple */
+    const f = (familia, cumple) => ({ familia, configFinal: { n: familia }, criterio: { cumple } })
+    assert.deepEqual(seleccionar([f('a', false), f('b', true), f('c', false), f('d', true), f('e', true)]).map((s) => [s.version, s.familia, s.experimental]),
+      [['v3', 'b', false], ['v4', 'd', false], ['v5', 'e', false]])
+    assert.deepEqual(seleccionar([f('a', false), f('b', true), f('c', false), f('d', false)]).map((s) => [s.version, s.familia, s.experimental]),
+      [['v3', 'b', false], ['v4', 'a', true], ['v5', 'c', true]])
+    assert.deepEqual(seleccionar([f('a', false), f('b', false), f('c', false), f('d', false)]).map((s) => [s.familia, s.experimental]),
+      [['a', true], ['b', true], ['c', true]])
+    assert.deepEqual(seleccionar([f('a', false), f('b', true)])[0].config, { n: 'b' })
+  })
   test('criterio: los 5 puntos por separado', () => {
     const base = {
       oos: { rentabilidad: 0.5, drawdownMaximo: 0.3 },
@@ -241,7 +252,9 @@ describe('laboratorio: validación por tramos', () => {
     const cocientes = r.ranking.map((x) => x.oos.cociente ?? -Infinity)
     assert.deepEqual(cocientes, [...cocientes].sort((a, b) => b - a))
     assert.equal(new Set(r.seleccion.map((s) => s.familia)).size, r.seleccion.length)
-    assert.deepEqual(r.seleccion.map((s) => s.version), ['v3', 'v4'].slice(0, r.seleccion.length))
+    assert.deepEqual(r.seleccion.map((s) => s.version), ['v3', 'v4'])
+    const orden = [...r.ranking.filter((x) => x.criterio.cumple), ...r.ranking.filter((x) => !x.criterio.cumple)]
+    assert.deepEqual(r.seleccion.map((s) => s.familia), orden.map((x) => x.familia).slice(0, 3))
     assert.deepEqual(Object.keys(r.reservado.porVersion), r.seleccion.map((s) => s.version))
     for (const s of r.seleccion) {
       assert.equal(s.experimental, !r.ranking.find((x) => x.familia === s.familia)?.criterio.cumple)

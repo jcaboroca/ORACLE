@@ -41,6 +41,8 @@ export const FRACCION_ANOS = 4 / 6
 export const FRACCION_MONEDAS = 4 / 5
 /** Caída máxima permitida frente a la de comprar y mantener. */
 export const FACTOR_CAIDA = 0.6
+/** Estrategias en vivo que salen del laboratorio. */
+export const PLAZAS = 3
 /** Meseta: la mediana de los vecinos debe ser al menos esta fracción del cociente de la elegida. */
 export const FACTOR_MESETA = 0.5
 
@@ -459,9 +461,7 @@ export function evaluarLaboratorio({
 
   const ordenadas = [...familias].sort((a, b) => (b.oos.cociente ?? -Infinity) - (a.oos.cociente ?? -Infinity)
     || cocienteOrden(b) - cocienteOrden(a))
-  const ganadoras = ordenadas.filter((f) => f.criterio.cumple)
-  const elegidas = ganadoras.length > 0 ? ganadoras.slice(0, 3) : ordenadas.slice(0, 3)
-  const seleccion = elegidas.map((f, i) => ({ version: `v${3 + i}`, familia: f.familia, config: f.configFinal, experimental: !f.criterio.cumple }))
+  const seleccion = seleccionar(ordenadas)
   const ranking = ordenadas.map((f) => ({
     familia: f.familia,
     version: seleccion.find((s) => s.familia === f.familia)?.version ?? null,
@@ -490,6 +490,18 @@ export function evaluarLaboratorio({
     seleccion,
     reservado: { desde: reservado.desde, hasta: reservado.hasta, monedas: reservado.monedas, porVersion },
   }
+}
+
+/**
+ * Hasta PLAZAS familias distintas, versiones v3, v4…: primero las que cumplen el criterio (en el orden del
+ * ranking); si son menos, se completa con las siguientes del ranking marcadas como experimentales (spec §4,
+ * último párrafo).
+ * @template {{ familia: string, configFinal: Record<string, unknown>, criterio: { cumple: boolean } }} F
+ * @param {F[]} ordenadas familias en el orden del ranking
+ */
+export function seleccionar(ordenadas) {
+  const elegidas = [...ordenadas.filter((f) => f.criterio.cumple), ...ordenadas.filter((f) => !f.criterio.cumple)].slice(0, PLAZAS)
+  return elegidas.map((f, i) => ({ version: `v${3 + i}`, familia: f.familia, config: f.configFinal, experimental: !f.criterio.cumple }))
 }
 
 /** Desempate estable del ranking por rentabilidad fuera de muestra. @param {{ oos: { rentabilidad: number } }} f */
