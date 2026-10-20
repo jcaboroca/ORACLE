@@ -282,3 +282,17 @@ tr.ejecutada td:first-child { box-shadow: inset 3px 0 0 var(--acento); }
 .leyenda .l-hodl-discontinua::before { background: none; border-top: 3px dashed currentColor; height: 0; }
 tr.principal td:first-child { font-weight: 700; }
 .consejo-de { margin: 0 0 .75rem; color: var(--suave); }
+
+/* Pestaña Laboratorio (Backtest) */
+.criterio { list-style: none; margin: .5rem 0; padding: 0; display: grid; gap: .25rem; }
+.criterio .cumple { color: var(--sube); }
+.criterio .no-cumple { color: var(--baja); }
+.familia-laboratorio { margin: .75rem 0; }
+.familia-laboratorio summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; }
+.criterio-lista { margin: .5rem 0; padding-left: 1.5rem; display: grid; gap: .25rem; }
+.conclusion-laboratorio { font-weight: 600; }
+.seleccion-laboratorio { display: grid; gap: .35rem; padding-left: 1.25rem; }
+.seleccion-laboratorio .cumple { color: var(--sube); }
+.insignia-experimental { color: var(--oro); font-size: .75rem; padding: .05rem .5rem; vertical-align: middle; }
+tr.cumple-criterio td:first-child { box-shadow: inset 3px 0 0 var(--sube); }
+.familia-laboratorio summary { flex-wrap: wrap; gap: .35rem; }

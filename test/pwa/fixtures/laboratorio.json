@@ -1,0 +1,77 @@
+{
+  "sintetico": true,
+  "generadoEn": "2026-10-21T08:00:00.000Z",
+  "aviso": "Datos sintéticos de prueba con la forma de data/laboratorio.json.",
+  "datosHasta": 1792540800000,
+  "duracionSegundos": 3,
+  "criterio": [
+    { "id": "rentabilidad", "texto": "Rentabilidad encadenada > 0" },
+    { "id": "caida", "texto": "Caída ≤ 0,6 × la de comprar y mantener" }
+  ],
+  "tramos": [
+    { "ano": 2019, "desde": 1546300800000, "hasta": 1577836800000, "monedas": ["BTC"], "prueba": false, "hodl": { "rentabilidad": 0.4 } },
+    { "ano": 2020, "desde": 1577836800000, "hasta": 1609459200000, "monedas": ["BTC", "ETH"], "prueba": true, "hodl": { "rentabilidad": 1.5 } },
+    { "ano": 2021, "desde": 1609459200000, "hasta": 1640995200000, "monedas": ["BTC", "ETH"], "prueba": true, "hodl": { "rentabilidad": 0.9 } }
+  ],
+  "familias": [{ "familia": "ruptura" }, { "familia": "cruce" }, { "familia": "inventada" }],
+  "ranking": [
+    {
+      "familia": "ruptura",
+      "version": "v3",
+      "config": { "entrada": 55, "salida": 20, "stop": null },
+      "oos": {
+        "rentabilidad": 1.2345,
+        "drawdownMaximo": 0.25,
+        "cociente": 4.9,
+        "rentabilidadHodl": 2.5,
+        "drawdownMaximoHodl": 0.6,
+        "operaciones": 42,
+        "porAno": [
+          { "ano": 2020, "rentabilidad": 0.8, "hodl": 1.5, "drawdownMaximo": 0.2, "drawdownMaximoHodl": 0.5 },
+          { "ano": 2021, "rentabilidad": -0.05, "hodl": 0.9, "drawdownMaximo": 0.25, "drawdownMaximoHodl": 0.6 }
+        ],
+        "porMoneda": { "BTC": 1234.5, "ETH": -10 }
+      },
+      "criterio": {
+        "puntos": [
+          { "id": "rentabilidad", "texto": "Rentabilidad encadenada > 0", "cumple": true },
+          { "id": "caida", "texto": "Caída ≤ 0,6 × la de comprar y mantener", "cumple": true }
+        ],
+        "cumple": true
+      }
+    },
+    {
+      "familia": "cruce",
+      "version": "v4",
+      "config": { "rapida": 20, "lenta": 100, "stop": 2.5 },
+      "oos": { "rentabilidad": 0.5, "drawdownMaximo": 0, "porAno": [], "porMoneda": {} },
+      "criterio": {
+        "puntos": [
+          { "id": "rentabilidad", "texto": "Rentabilidad encadenada > 0", "cumple": true },
+          { "id": "caida", "texto": "Caída ≤ 0,6 × la de comprar y mantener", "cumple": false }
+        ],
+        "cumple": false
+      }
+    },
+    {
+      "familia": "inventada",
+      "config": "a mano",
+      "oos": { "rentabilidad": -0.1, "drawdownMaximo": 0.3, "porAno": [], "porMoneda": {} },
+      "criterio": { "puntos": [], "cumple": false }
+    }
+  ],
+  "seleccion": [
+    { "version": "v3", "familia": "ruptura", "config": { "entrada": 55, "salida": 20, "stop": null }, "experimental": false },
+    { "version": "v4", "familia": "cruce", "config": { "rapida": 20, "lenta": 100, "stop": 2.5 }, "experimental": true }
+  ],
+  "reservado": {
+    "desde": 1767225600000,
+    "hasta": 1792540800000,
+    "monedas": ["BTC", "ETH"],
+    "porVersion": {
+      "v3": { "rentabilidad": 0.12, "drawdownMaximo": 0.08, "operaciones": 14, "rentabilidadHodl": -0.1, "drawdownMaximoHodl": 0.3 },
+      "v4": { "rentabilidad": -0.02, "drawdownMaximo": 0.05, "operaciones": 3 }
+    },
+    "notas": ["se ignora", 3]
+  }
+}
