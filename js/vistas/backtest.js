@@ -163,9 +163,10 @@ export async function vistaBacktest(ctx) {
       columnas: [{ clave: 'veredicto', texto: 'Señal' }, { clave: 'motivo', texto: 'Decisión' }, { clave: 'cantidad', texto: 'Horas', numerica: true }],
       filas: l.decisiones,
     })),
-    h('p', { class: 'ayuda' }, l.aviso,
-      typeof familia === 'string'
-        ? ' Esta estrategia del laboratorio solo usa análisis técnico de las velas diarias: ni noticias, ni derivados, ni Fear & Greed.'
-        : ' El backtest no usa noticias ni derivados: no hay histórico gratuito fiable, así que sus pesos se reparten entre técnico y Fear & Greed.'))
+    // El aviso de data/backtest-vN.json habla de la variante técnico + Fear & Greed: no vale para las del laboratorio.
+    h('p', { class: 'ayuda' }, typeof familia === 'string'
+      ? 'Simulación con datos históricos. Esta estrategia del laboratorio solo usa análisis técnico de las velas diarias: '
+        + 'ni noticias, ni derivados, ni Fear & Greed. No es asesoramiento financiero ni garantía de beneficio.'
+      : [l.aviso, ' El backtest no usa noticias ni derivados: no hay histórico gratuito fiable, así que sus pesos se reparten entre técnico y Fear & Greed.']))
   return { titulo: 'Backtest', nodo, montar: () => graficoCurva(lienzo, curva) }
 }

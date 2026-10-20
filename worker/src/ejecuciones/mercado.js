@@ -86,7 +86,8 @@ export async function recogerDatos({ db, fetch, monedas, ahora, esperar, llmExte
 }
 
 /**
- * Señal lista para senales_actuales y la API: precio en €, cambio 24 h, explicación y SL/TP orientativos.
+ * Señal lista para senales_actuales y la API: precio en €, cambio 24 h, explicación y SL/TP orientativos (null el
+ * nivel que la estrategia desactiva; sin ninguno de los dos, orientativo = null).
  * @param {Senal} senal
  * @param {EntradaMoneda} entrada
  * @param {number} ahora
@@ -95,10 +96,11 @@ export async function recogerDatos({ db, fetch, monedas, ahora, esperar, llmExte
  */
 export function enriquecerSenal(senal, entrada, ahora, explicacion, parametrosBot) {
   const precioEur = ultimoCierre(entrada.velasEur, ahora)
-  const orientativo = precioEur !== null && typeof senal.atrPct === 'number'
+  const sinNiveles = parametrosBot.sinStopLoss === true && parametrosBot.sinTakeProfit === true
+  const orientativo = precioEur !== null && typeof senal.atrPct === 'number' && !sinNiveles
     ? {
-      stopLoss: precioEur * (1 - parametrosBot.multStopLoss * senal.atrPct),
-      takeProfit: precioEur * (1 + parametrosBot.multTakeProfit * senal.atrPct),
+      stopLoss: parametrosBot.sinStopLoss ? null : precioEur * (1 - parametrosBot.multStopLoss * senal.atrPct),
+      takeProfit: parametrosBot.sinTakeProfit ? null : precioEur * (1 + parametrosBot.multTakeProfit * senal.atrPct),
     }
     : null
   return {

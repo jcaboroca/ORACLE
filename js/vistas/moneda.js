@@ -39,7 +39,8 @@ function bloqueSenal(senal, ahora) {
       + `${senal.alineacion ? ' · temporalidades alineadas' : ''} · estrategia ${senal.version}`),
     senal.motivo ? h('p', null, `Motivo: ${textoMotivo(senal.motivo)}.`) : null,
     h('p', { class: 'ayuda' }, `Calculada ${hace(senal.calculadaEn, ahora)}.`, vieja ? h('span', { class: 'chip chip-alerta' }, 'desactualizada') : null),
-    sltp ? h('p', null, `Si se abriera ahora (orientativo): stop-loss ${sltp.stopLoss} · take-profit ${sltp.takeProfit}.`) : null)
+    sltp ? h('p', null, `Si se abriera ahora (orientativo): ${sltp.stopLoss === null ? 'sin stop-loss' : `stop-loss ${sltp.stopLoss}`}`
+      + ` · ${sltp.takeProfit === null ? 'sin take-profit' : `take-profit ${sltp.takeProfit}`}.`) : null)
 }
 
 /**

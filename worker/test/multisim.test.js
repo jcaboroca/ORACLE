@@ -4,12 +4,14 @@ import { describe, test } from 'node:test'
 import { estadoInicial, velaDeDecision } from '../../core/bot.js'
 import * as v1 from '../../core/estrategia-v1.js'
 import * as v2 from '../../core/estrategia-v2.js'
+import { estrategia } from '../../core/estrategias.js'
 import { ejecutarHora } from '../../core/hora.js'
 import { ejecutarMercado } from '../src/ejecuciones/mercado.js'
 import {
   cargarEstado, cargarEstados, crearSimulacion, guardarCapital, guardarCapitales, obtenerSimulacion, reiniciarSimulaciones,
   senalesActuales, simulacionActiva, simulacionesActivas, sincronizarSimulaciones,
 } from '../src/repositorio.js'
+import { crearVivo } from '../src/vivo.js'
 import { crearD1 } from './d1.js'
 import { ahoraDe, crearEscenario, entradasBacktest, fetchEscenario, sinEspera } from './escenario.js'
 import { v1b, vivoDePrueba } from './vivo.js'
@@ -241,5 +243,25 @@ describe('ejecutarMercado con varias estrategias en vivo', () => {
     assert.ok(r.senales.every((s) => s.version === 'v2'))
     assert.deepEqual(await simulacionesActivas(db), [sim])
     for (const t of ['decisiones', 'operaciones', 'capital']) assert.equal(await contar(db, t), 0, t)
+  })
+})
+
+describe('señales de la principal con niveles de salida desactivados', () => {
+  test('sin stop-loss ni take-profit (v3): orientativo null; con solo uno desactivado, ese nivel es null', async () => {
+    const ahora = ahoraDe(0)
+    const tres = await ejecutarMercado({
+      vivo: vivoDePrueba(['v3', 'v1']), esperar: sinEspera, env: entorno(crearD1()), fetch: fetchEscenario(crearEscenario(), ahora), ahora,
+    })
+    assert.ok(tres.senales.length > 0 && tres.senales.every((s) => s.version === 'v3' && s.orientativo === null))
+    const sinTp = Object.freeze({
+      ...v1b, VERSION: 'v1c', PARAMETROS_BOT: Object.freeze({ ...v1.PARAMETROS_BOT, sinTakeProfit: true }),
+      calcularSenal: (/** @type {any} */ e) => ({ ...v1.calcularSenal(e), version: 'v1c' }),
+    })
+    const vivo = crearVivo({ versiones: ['v1c'], principal: 'v1c', estrategia: (v) => (v === 'v1c' ? sinTp : estrategia(v)) })
+    const r = await ejecutarMercado({ vivo, esperar: sinEspera, env: entorno(crearD1()), fetch: fetchEscenario(crearEscenario(), ahora), ahora })
+    for (const s of r.senales) {
+      assert.ok(typeof s.orientativo?.stopLoss === 'number' && s.orientativo.stopLoss < s.precioEur, s.simbolo)
+      assert.equal(s.orientativo?.takeProfit, null)
+    }
   })
 })

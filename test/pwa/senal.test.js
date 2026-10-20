@@ -108,6 +108,7 @@ describe('señal en la interfaz', () => {
     assert.equal(filasTimeframes({ detalle: { timeframes: { '1h': null } } })[2].ausente, true)
     assert.deepEqual(orientativo(moneda.senal), { stopLoss: `96,65${ESP}€`, takeProfit: `105,20${ESP}€` })
     assert.equal(orientativo({ orientativo: null }), null)
+    assert.deepEqual(orientativo({ orientativo: { stopLoss: 96.65, takeProfit: null } }), { stopLoss: `96,65${ESP}€`, takeProfit: null })
   })
 
   test('historial de decisiones real: ejecutadas y no ejecutadas con motivo legible', async () => {
@@ -121,7 +122,7 @@ describe('señal en la interfaz', () => {
   test('todo el vocabulario de decisiones.motivo tiene texto (spec §7.2)', () => {
     for (const m of ['abierta', 'cerrada', 'mantener', 'contradiccion_tecnico_derivados', 'filtro_regimen', 'sin_posicion',
       'ya_en_posicion', 'confianza_baja', 'saldo_insuficiente', 'datos_desactualizados', 'sin_datos', 'enfriamiento',
-      'cerrada_por_stop', 'fuera_de_ventana']) {
+      'cerrada_por_stop', 'fuera_de_ventana', 'fuera_de_revision', 'sobre_sma5', 'plazo', 'velas_insuficientes']) {
       assert.ok(MOTIVOS[m], m)
     }
     assert.equal(textoMotivo('nuevo_motivo'), 'nuevo_motivo')

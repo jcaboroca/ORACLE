@@ -129,7 +129,10 @@ export const MOTIVOS = Object.freeze({
   sin_datos: 'Sin datos de velas',
   enfriamiento: 'Enfriamiento tras un stop-loss',
   cerrada_por_stop: 'Cerrada por stop en esta hora',
-  fuera_de_ventana: 'Fuera de la ventana de decisión (v2 decide a las 00:00 UTC)',
+  fuera_de_ventana: 'Fuera de la ventana de decisión (las estrategias diarias deciden a las 00:00 UTC)',
+  fuera_de_revision: 'Fuera del día de revisión (revisa una vez por semana, los lunes)',
+  sobre_sma5: 'El cierre supera la SMA5',
+  plazo: 'Plazo cumplido desde la entrada',
   contradiccion_tecnico_derivados: 'Técnico y derivados se contradicen',
   filtro_regimen: 'Filtro de régimen: cierre diario bajo la EMA200',
   velas_insuficientes: 'Velas insuficientes',
@@ -165,11 +168,14 @@ export function filasTimeframes(senal) {
 }
 
 /**
- * SL/TP orientativos en € si se abriera ahora (no son los de ninguna posición).
+ * SL/TP orientativos en € si se abriera ahora (no son los de ninguna posición); null el nivel que la estrategia no usa.
  * @param {any} senal
  */
 export const orientativo = (senal) => (senal?.orientativo
-  ? { stopLoss: precio(senal.orientativo.stopLoss), takeProfit: precio(senal.orientativo.takeProfit) }
+  ? {
+    stopLoss: typeof senal.orientativo.stopLoss === 'number' ? precio(senal.orientativo.stopLoss) : null,
+    takeProfit: typeof senal.orientativo.takeProfit === 'number' ? precio(senal.orientativo.takeProfit) : null,
+  }
   : null)
 
 /** Solo enlaces http(s): un titular nunca puede inyectar javascript:. @param {string|null|undefined} url */
