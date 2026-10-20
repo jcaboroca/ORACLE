@@ -134,3 +134,27 @@ Ambos escuchan solo en `127.0.0.1`, y `npm run dev` no sirve rutas ocultas (`.gi
 
 Para probar contra el Worker de verdad en local, en lugar de la API simulada usa `npx wrangler@4 dev`
 desde `worker/` (ver la checklist del plan 2).
+
+## Bot con varias estrategias en vivo
+
+Spec: [docs/superpowers/specs/2026-10-20-oracle-laboratorio-design.md](docs/superpowers/specs/2026-10-20-oracle-laboratorio-design.md) §6-§8.
+
+- `core/estrategias.js` exporta `ESTRATEGIAS_EN_VIVO` (las que operan, cada una con su simulación activa) y
+  `ESTRATEGIA_PRINCIPAL` (la que da el consejo del Panel y la única con explicaciones del LLM). Cada módulo de
+  estrategia puede exportar `ETIQUETA`, el nombre que enseñan el Bot y el Panel (v4 y v5 se marcan «experimental»).
+- Migración `0006_multisim.sql`: una simulación activa **por estrategia** (índice único parcial sobre
+  `estrategia_version`). Se aplica con `npx wrangler@4 d1 migrations apply oracle --remote` desde `worker/`
+  **antes** de desplegar el código.
+- Cron de mercado: descarga los datos una vez, cierra las simulaciones activas de estrategias que ya no están en
+  la lista (quedan en el historial), crea con 10.000 € las que falten y ejecuta `core/hora.js` por simulación,
+  con su estrategia y sus lotes atómicos por moneda. `POST /api/analizar` sigue sin operar.
+- API: `GET /api/bot/comparativa` (curvas y métricas de las simulaciones activas y comprar y mantener),
+  `GET /api/simulaciones` con `etiqueta` y `principal`, `GET /api/resumen` con `estrategiaPrincipal`,
+  `GET /api/bot` sin `?simulacion=` = la de la principal y `POST /api/bot/reiniciar`, que reinicia todas a la vez.
+  Contrato en [docs/superpowers/plans/2026-10-20-oracle-plan-5-multisim.md](docs/superpowers/plans/2026-10-20-oracle-plan-5-multisim.md).
+- PWA: el Panel dice qué estrategia aconseja; el Bot abre con la comparativa (gráfico con una curva por
+  estrategia y comprar y mantener, y tabla lado a lado) y debajo el detalle de cada simulación; el Backtest
+  tiene la pestaña «Laboratorio» (`data/laboratorio.json`; sin ese archivo, «Laboratorio aún no ejecutado») con el
+  criterio, el ranking, qué familia lo cumple y las desplegadas «experimental» que no.
+- En local, `npm run api-simulada` arranca el Worker con 3 estrategias de prueba (datos sintéticos) para ver la
+  comparativa sin desplegar.
