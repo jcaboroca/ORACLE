@@ -7,6 +7,9 @@ import { crear } from './familias/momentum.js'
 
 export const VERSION = 'v3'
 
+/** Nombre en la interfaz (Bot y Panel): la única que cumple el criterio del laboratorio. */
+export const ETIQUETA = 'Momentum 1D'
+
 const estrategia = crear({ dias: 30, revision: 'semanal', stop: null }, VERSION)
 
 /** Señal: { familia: 'momentum', config: { dias: 30, revision: 'semanal', stop: null } }. */

@@ -1,10 +1,11 @@
 // @ts-check
-// Panel (spec §12): Fear & Greed, una tarjeta por moneda, último análisis, frescura y «Analizar ahora».
+// Panel (spec §12): Fear & Greed, una tarjeta por moneda (consejo de la estrategia principal, que se nombra),
+// último análisis, frescura y «Analizar ahora».
 import { ErrorApi, mensajeError } from '../api.js'
 import { aviso, h, insignia, s } from '../dom.js'
 import { euros, fechaHora, hace, hora, porcentaje } from '../formato.js'
 import { hashDe } from '../rutas.js'
-import { frenteAHodl } from '../cartera.js'
+import { frenteAHodl, textoConsejo } from '../cartera.js'
 import { lecturaFng, puntoArco, tarjetaMoneda } from '../senal.js'
 import { avisoDeError, cabecera, seccion } from './comun.js'
 
@@ -57,7 +58,7 @@ function bloqueBot(bot) {
   return seccion('Bot',
     h('a', { class: 'tarjeta', href: hashDe('bot') },
       h('div', { class: 'tarjeta-fila' },
-        h('span', null, `Simulación ${bot.simulacionId} · ${bot.estrategiaVersion}`),
+        h('span', null, `Simulación ${bot.simulacionId} · ${bot.estrategiaVersion} (principal)`),
         h('span', { class: 'tarjeta-precio' }, euros(bot.valorCartera))),
       h('p', null, `Rentabilidad ${porcentaje(bot.rentabilidad, { signo: true })} · ${bot.posicionesAbiertas} posiciones abiertas · saldo ${euros(bot.saldo)}`),
       h('p', { class: comparacion.clase }, comparacion.texto)))
@@ -129,9 +130,10 @@ export async function vistaPanel(ctx) {
   const senales = r.senales.length > 0
     ? h('ul', { class: 'tarjetas' }, r.senales.map((/** @type {any} */ x) => tarjeta(x, r.ahora)))
     : h('p', { class: 'vacio' }, 'Aún no hay señales: el primer análisis llega con el cron de mercado (minuto 3 de cada hora).')
+  const consejo = textoConsejo(r.estrategiaPrincipal)
   const nodo = h('div', { class: 'vista vista-panel' },
     cabecera('Panel', bloqueEjecucion(r)),
-    seccion('Monedas', senales, h('div', { class: 'analizar' }, boton, estado),
+    seccion('Monedas', consejo ? h('p', { class: 'consejo-de' }, consejo) : null, senales, h('div', { class: 'analizar' }, boton, estado),
       h('p', { class: 'ayuda' }, 'Analizar ahora recalcula las señales (como mucho una vez cada 5 minutos). Nunca abre ni cierra posiciones.')),
     bloqueFng(r.fng),
     bloqueBot(r.bot))

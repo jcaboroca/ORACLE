@@ -7,6 +7,9 @@ import { crear } from './familias/ruptura.js'
 
 export const VERSION = 'v5'
 
+/** Nombre en la interfaz (Bot y Panel): no cumple el criterio del laboratorio. */
+export const ETIQUETA = 'Ruptura de Donchian 1D (experimental)'
+
 const estrategia = crear({ entrada: 20, salida: 20, stop: null }, VERSION)
 
 /** Señal: { familia: 'ruptura', config: { entrada: 20, salida: 20, stop: null } }. */

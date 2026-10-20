@@ -245,3 +245,40 @@ tr.ejecutada td:first-child { box-shadow: inset 3px 0 0 var(--acento); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Tablas anchas (comparativa del Bot y Laboratorio). Por encima de 680 px, cabeceras y celdas de las apilables
+   parten línea y, si aun así no caben, la tabla se desplaza en horizontal con una sombra en el borde mientras quedan
+   columnas por ver (las capas «local» la tapan al llegar al final). Por debajo (móviles), cada fila de una tabla
+   apilable es una tarjeta con la cabecera delante de cada valor. */
+.tabla-desplazable {
+  background:
+    linear-gradient(to right, var(--panel) 30%, transparent) left center / 2.5rem 100% no-repeat local,
+    linear-gradient(to left, var(--panel) 30%, transparent) right center / 2.5rem 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, rgba(45, 212, 191, .35), transparent) left center / .9rem 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, rgba(45, 212, 191, .35), transparent) right center / .9rem 100% no-repeat scroll;
+}
+.tabla-apilable th, .tabla-apilable td { white-space: normal; }
+.tabla-apilable th { vertical-align: bottom; }
+@media (max-width: 680px) {
+  .tabla-apilable { overflow-x: visible; background: none; }
+  .tabla-apilable table, .tabla-apilable tbody, .tabla-apilable tr, .tabla-apilable td { display: block; width: 100%; }
+  .tabla-apilable thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .tabla-apilable tr { background: var(--panel-2); border: 1px solid var(--borde); border-radius: 10px; padding: .35rem .75rem; margin: 0 0 .6rem; }
+  .tabla-apilable td {
+    display: flex; justify-content: space-between; gap: 1rem; align-items: baseline; text-align: right;
+    white-space: normal; overflow-wrap: anywhere; border-bottom: 1px solid var(--borde); padding: .4rem 0;
+  }
+  .tabla-apilable td:last-child { border-bottom: 0; }
+  .tabla-apilable td::before { content: attr(data-etiqueta); color: var(--suave); font-weight: 600; text-align: left; flex: 0 0 auto; }
+  .tabla-apilable td:empty::after { content: "—"; }
+  .tabla-apilable tr.principal td:first-child { box-shadow: none; }
+}
+
+/* Comparativa de estrategias en vivo (Bot) */
+.l-est-0 { color: #2dd4bf; }
+.l-est-1 { color: #60a5fa; }
+.l-est-2 { color: #c084fc; }
+.l-est-3 { color: #f472b6; }
+.leyenda .l-hodl-discontinua::before { background: none; border-top: 3px dashed currentColor; height: 0; }
+tr.principal td:first-child { font-weight: 700; }
+.consejo-de { margin: 0 0 .75rem; color: var(--suave); }

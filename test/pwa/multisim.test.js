@@ -1,10 +1,13 @@
 // @ts-check
 import assert from 'node:assert/strict'
 import { afterEach, describe, test } from 'node:test'
+import { ESTRATEGIAS, ESTRATEGIA_PRINCIPAL, estrategia } from '../../core/estrategias.js'
 import { MAX_EN_VUELO, crearApi } from '../../js/api.js'
-import { filasComparativa, textoConsejo } from '../../js/cartera.js'
+import { filaOperacion, filaPosicion, filasComparativa, filasMetricas, textoConsejo } from '../../js/cartera.js'
 import { COLORES, COLORES_ESTRATEGIAS, graficoComparativa } from '../../js/graficos.js'
 import { curvasComparativa } from '../../js/series.js'
+import { barrasComponentes, filaDecision, filasTimeframes, tarjetaMoneda } from '../../js/senal.js'
+import { crearVivo } from '../../worker/src/vivo.js'
 import { vivoDePrueba } from '../../worker/test/vivo.js'
 import { BASE, PIN, workerSimulado } from './ayudantes.js'
 import { leer } from './modulos.js'
@@ -143,5 +146,51 @@ describe('comparativa de estrategias en la interfaz', () => {
     assert.equal(rutas.length, 15)
     assert.equal(rutas[0], '/api/bot/comparativa')
     assert.equal(maximo, MAX_EN_VUELO)
+  })
+})
+
+describe('vistas con varias estrategias', () => {
+  test('vistas: el Bot pide primero la comparativa sola, pinta su gráfico con atribución; el Panel nombra la estrategia', () => {
+    const bot = leer('js/vistas/bot.js')
+    const comparativa = bot.indexOf('ctx.api.comparativa()')
+    assert.ok(comparativa > 0 && comparativa < bot.indexOf('ctx.api.bot(simulacion)'), 'la comparativa va primero, sola')
+    assert.match(bot, /graficoComparativa\(lienzo, curvas\)/)
+    assert.match(bot, /hayCurva \? notaAtribucion\(\) : null/)
+    assert.doesNotMatch(bot, /ESTRATEGIA_ACTIVA/)
+    assert.match(leer('js/vistas/panel.js'), /textoConsejo\(r\.estrategiaPrincipal\)/)
+  })
+})
+
+describe('cualquier estrategia registrada en vivo', () => {
+  test('v1…v5 a la vez (v3, v4 y v5 sin pesos propios): resumen, comparativa, detalle y moneda se leen sin romper', async () => {
+    const versiones = Object.keys(ESTRATEGIAS)
+    const w = await workerSimulado({ vivo: crearVivo({ versiones, principal: ESTRATEGIA_PRINCIPAL, estrategia }) })
+    const api = crearApi({ base: BASE, fetch: w.fetch, pin: () => PIN })
+    const r = await api.resumen()
+    assert.equal(r.estrategiaPrincipal.version, ESTRATEGIA_PRINCIPAL)
+    assert.match(textoConsejo(r.estrategiaPrincipal), new RegExp(`^Consejo de la estrategia ${ESTRATEGIA_PRINCIPAL}\\b.*, la principal de las ${versiones.length} en vivo\\.$`))
+    for (const s of r.senales) {
+      assert.equal(barrasComponentes(s).length, 4)
+      assert.ok(tarjetaMoneda(s, w.ahora))
+      assert.ok(Array.isArray(filasTimeframes(s)))
+    }
+    const c = await api.comparativa()
+    assert.deepEqual(c.simulaciones.map((/** @type {any} */ s) => s.estrategiaVersion), versiones)
+    const filas = filasComparativa(c)
+    assert.equal(filas.length, versiones.length + 1)
+    for (const v of ['v4', 'v5']) assert.match(String(filas.find((f) => f.estrategia.startsWith(`${v} `))?.estrategia), /\(experimental\)$/)
+    assert.equal(curvasComparativa(c).estrategias.length, versiones.length)
+    for (const s of c.simulaciones) {
+      const b = await api.bot(s.id)
+      assert.equal(b.simulacion.estrategiaVersion, s.estrategiaVersion)
+      assert.ok(filasMetricas(b.metricas).length > 0)
+      b.abiertas.forEach(filaPosicion)
+      const [ops, decs] = await Promise.all([api.operaciones({ simulacion: s.id }), api.decisiones({ simulacion: s.id })])
+      ops.items.forEach(filaOperacion)
+      assert.ok(decs.items.length > 0, s.estrategiaVersion)
+      for (const d of decs.items) assert.ok(filaDecision(d).motivo, `${s.estrategiaVersion} ${d.motivo}`)
+    }
+    const m = await api.moneda('BTC')
+    assert.ok(barrasComponentes(m.senal).length === 4 && Array.isArray(filasTimeframes(m.senal)))
   })
 })

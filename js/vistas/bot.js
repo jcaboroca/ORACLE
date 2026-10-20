@@ -1,17 +1,18 @@
 // @ts-check
-// Bot (spec §12): valor de cartera frente a comprar y mantener, curva de capital, métricas de §7.7 (también por
-// moneda), posiciones abiertas con SL/TP fijos, operaciones, decisiones con filtro, selector de simulación y reinicio.
-import { ESTRATEGIA_ACTIVA } from '../../core/estrategias.js'
+// Bot (spec §12 y spec del laboratorio §7): comparativa de las simulaciones activas (una por estrategia en vivo:
+// curvas de capital frente a comprar y mantener y métricas lado a lado) y, debajo, el detalle de una simulación:
+// valor de cartera, curva, métricas de §7.7 (también por moneda), posiciones abiertas con SL/TP fijos,
+// operaciones, decisiones con filtro, selector de simulación y reinicio.
 import { mensajeError } from '../api.js'
 import {
-  CAPITAL_POR_DEFECTO, FILTROS_DECISION, filaOperacion, filaPosicion, filasMetricas, filasPorMoneda, filtrarDecisiones,
-  frenteAHodl, opcionesSimulacion, validarCapital,
+  CAPITAL_POR_DEFECTO, FILTROS_DECISION, filaOperacion, filaPosicion, filasComparativa, filasMetricas, filasPorMoneda,
+  filtrarDecisiones, frenteAHodl, opcionesSimulacion, validarCapital,
 } from '../cartera.js'
 import { aviso, definiciones, filaTabla, h, tabla } from '../dom.js'
 import { entero, euros, fechaHora, porcentaje } from '../formato.js'
-import { graficoCurva } from '../graficos.js'
+import { graficoComparativa, graficoCurva } from '../graficos.js'
 import { conParams, hashDe, paramEntero, paramOpcion } from '../rutas.js'
-import { curvaComparada } from '../series.js'
+import { curvaComparada, curvasComparativa } from '../series.js'
 import { filaDecision } from '../senal.js'
 import { avisoDeError, cabecera, intentar, notaAtribucion, seccion } from './comun.js'
 
@@ -66,18 +67,20 @@ function listaPaginada({ titulo, columnas, pagina, cargar, aFila, filtrar = (x) 
 }
 
 /**
- * Diálogo de reinicio con confirmación (la simulación actual se cierra y se conserva; nada se borra).
- * @param {import('./comun.js').Contexto} ctx @param {any} simulacion
+ * Diálogo de reinicio con confirmación: se cierran todas las simulaciones activas (se conservan; nada se borra)
+ * y empieza una por cada estrategia en vivo, todas con el mismo capital.
+ * @param {import('./comun.js').Contexto} ctx @param {string[]} estrategias etiquetas de las activas (puede ir vacía)
  */
-function reinicio(ctx, simulacion) {
+function reinicio(ctx, estrategias) {
   const error = h('p', { class: 'error', role: 'alert' })
   const campo = h('input', { id: 'capital', name: 'capital', type: 'text', inputmode: 'decimal', autocomplete: 'off', value: entero(CAPITAL_POR_DEFECTO), 'aria-describedby': 'capital-ayuda' })
   const confirmar = h('button', { type: 'submit', class: 'boton boton-peligro' }, 'Cerrar y empezar otra')
   const cancelar = h('button', { type: 'button', class: 'boton' }, 'Cancelar')
   const formulario = h('form', { class: 'formulario' },
-    h('h3', { id: 'reinicio-titulo' }, 'Reiniciar la simulación'),
-    h('p', null, `La simulación ${simulacion.id} se cerrará con su última valoración y se conservará todo su historial. `
-      + `La nueva empieza con la estrategia ${ESTRATEGIA_ACTIVA} y el capital que indiques.`),
+    h('h3', { id: 'reinicio-titulo' }, 'Reiniciar el bot'),
+    h('p', null, `${estrategias.length > 1 ? `Las ${estrategias.length} simulaciones activas (${estrategias.join(', ')}) se cerrarán`
+      : 'La simulación activa se cerrará'} con su última valoración y se conservará todo su historial. `
+      + 'Empezará una nueva por cada estrategia en vivo, todas a la vez y con el capital que indiques.'),
     h('label', { for: 'capital' }, 'Capital inicial (€)'),
     campo,
     h('p', { id: 'capital-ayuda', class: 'ayuda' }, 'Entre 100 € y 1.000.000 €.'),
@@ -96,8 +99,10 @@ function reinicio(ctx, simulacion) {
     confirmar.disabled = true
     try {
       const r = await ctx.api.reiniciar(v.capital)
+      const nuevas = Array.isArray(r.simulaciones) ? r.simulaciones.length : 1
       dialogo.close()
-      ctx.avisar(`Simulación ${r.simulacion.id} creada con ${euros(r.simulacion.capitalInicial)}. La anterior queda cerrada.`)
+      ctx.avisar(`${nuevas > 1 ? `${nuevas} simulaciones creadas` : `Simulación ${r.simulacion.id} creada`} con `
+        + `${euros(r.simulacion.capitalInicial)}${nuevas > 1 ? ' cada una' : ''}. Las anteriores quedan cerradas.`)
       ctx.navegar(hashDe('bot'))
     } catch (e) {
       if (ctx.exigirPin(e)) return
@@ -106,13 +111,52 @@ function reinicio(ctx, simulacion) {
       confirmar.disabled = false
     }
   })
-  const abrir = h('button', { type: 'button', class: 'boton boton-peligro' }, 'Reiniciar simulación…')
+  const abrir = h('button', { type: 'button', class: 'boton boton-peligro' }, 'Reiniciar el bot…')
   abrir.addEventListener('click', () => {
     error.textContent = ''
     dialogo.showModal()
     campo.select()
   })
   return h('div', { class: 'reinicio' }, abrir, dialogo)
+}
+
+/**
+ * Comparativa de las simulaciones activas: gráfico con una curva por estrategia más comprar y mantener, y tabla
+ * de métricas con un enlace al detalle de cada una.
+ * @param {import('./comun.js').Contexto} ctx
+ * @param {any} c respuesta de GET /api/bot/comparativa
+ * @param {number|null} viendo simulación del detalle
+ * @returns {{ nodo: HTMLElement, montar?: () => () => void }}
+ */
+function bloqueComparativa(ctx, c, viendo) {
+  if (c.simulaciones.length === 0) {
+    return { nodo: seccion('Comparativa de estrategias', h('p', { class: 'vacio' }, 'Aún no hay simulaciones activas: se crean en la primera ejecución del cron de mercado (minuto 3 de cada hora).')) }
+  }
+  const curvas = curvasComparativa(c)
+  const hayCurva = curvas.estrategias.some((e) => e.puntos.length > 1)
+  const lienzo = h('div', { class: 'grafico grafico-curva', role: 'group', 'aria-label': 'Curvas de capital de las estrategias en vivo frente a comprar y mantener' })
+  const filas = filasComparativa(c).map((f) => ({
+    ...f,
+    detalle: f.id === null ? '—' : f.id === viendo ? 'En pantalla'
+      : h('a', { href: conParams(ctx.ruta, { simulacion: f.id, simbolo: null }) }, 'Ver detalle'),
+  }))
+  const nodo = seccion('Comparativa de estrategias',
+    hayCurva ? lienzo : h('p', { class: 'vacio' }, 'Las curvas aparecen tras la segunda hora de las simulaciones.'),
+    h('p', { class: 'leyenda' }, curvas.estrategias.map((e, i) => h('span', { class: `l-est-${i % 4}` }, e.etiqueta)),
+      h('span', { class: 'l-hodl l-hodl-discontinua' }, 'Comprar y mantener')),
+    hayCurva ? notaAtribucion() : null,
+    tabla({
+      titulo: 'Métricas de las estrategias en vivo',
+      columnas: [{ clave: 'estrategia', texto: 'Estrategia' }, { clave: 'valor', texto: 'Valor', numerica: true },
+        { clave: 'rentabilidad', texto: 'Rentabilidad', numerica: true }, { clave: 'caida', texto: 'Caída máx.', numerica: true },
+        { clave: 'operaciones', texto: 'Operaciones', numerica: true }, { clave: 'detalle', texto: 'Detalle' }],
+      filas,
+      claseFila: (f) => (f.principal ? 'principal' : undefined),
+      apilable: true,
+    }),
+    h('p', { class: 'ayuda' }, 'Todas empezaron a la vez con el mismo capital. La principal es la que da el consejo del Panel. '
+      + 'Caída máx. = drawdown máximo. Horaria los últimos 30 días; antes, un punto por día.'))
+  return { nodo, montar: hayCurva ? () => graficoComparativa(lienzo, curvas) : undefined }
 }
 
 /** @param {import('./comun.js').Contexto} ctx @returns {Promise<import('./comun.js').Pantalla>} */
@@ -122,12 +166,19 @@ export async function vistaBot(ctx) {
   const simbolo = /^[A-Z0-9]{2,10}$/.test(ruta.params.simbolo ?? '') ? ruta.params.simbolo : null
   const filtro = paramOpcion(ruta.params, 'filtro', FILTROS_DECISION.map((f) => f.clave), 'todas')
   // Primero una sola petición: con un PIN caducado, 4 en paralelo gastarían 4 de los 5 intentos antes del bloqueo.
+  // avisoDeError propaga los errores de PIN y bloqueo; cualquier otro (p. ej. un Worker sin la ruta) se muestra.
+  const comp = await intentar(ctx.api.comparativa())
+  const comparativa = comp.ok
+    ? bloqueComparativa(ctx, comp.valor, simulacion ?? comp.valor.simulaciones.find((/** @type {any} */ s) => s.principal)?.id ?? null)
+    : { nodo: seccion('Comparativa de estrategias', avisoDeError(comp.error)) }
+  const etiquetas = comp.ok ? comp.valor.simulaciones.map((/** @type {any} */ s) => s.etiqueta || s.estrategiaVersion) : []
   const bot = await intentar(ctx.api.bot(simulacion))
   if (!bot.ok) {
     const sinSimulacion = /** @type {any} */ (bot.error)?.estado === 404 && simulacion === null
     const nodo = h('div', { class: 'vista' }, cabecera('Bot'),
-      sinSimulacion ? aviso('Aún no hay simulación: se crea en la primera ejecución del cron de mercado (minuto 3 de cada hora).') : avisoDeError(bot.error))
-    return { titulo: 'Bot', nodo }
+      sinSimulacion ? aviso('Aún no hay simulación: se crea en la primera ejecución del cron de mercado (minuto 3 de cada hora).') : avisoDeError(bot.error),
+      comp.ok && comp.valor.simulaciones.length > 0 ? comparativa.nodo : null)
+    return { titulo: 'Bot', nodo, montar: comparativa.montar }
   }
   const b = bot.valor
   const sim = b.simulacion
@@ -152,11 +203,13 @@ export async function vistaBot(ctx) {
   const lienzo = h('div', { class: 'grafico grafico-curva', role: 'group', 'aria-label': 'Curva de capital del bot frente a comprar y mantener' })
   const curva = curvaComparada(b.curva)
   const nodo = h('div', { class: 'vista vista-bot' },
-    cabecera('Bot',
+    cabecera('Bot', h('p', { class: 'ayuda' }, 'Una simulación por cada estrategia en vivo, todas con dinero virtual.')),
+    comparativa.nodo,
+    seccion('Detalle de una simulación',
       h('div', { class: 'campo' }, h('label', { for: 'simulacion' }, 'Simulación'), selectorSim),
-      h('p', { class: 'ayuda' }, `Estrategia ${sim.estrategiaVersion} · capital inicial ${euros(sim.capitalInicial)} · desde ${fechaHora(sim.creadaEn)}`
-        + `${sim.activa ? '' : ` · cerrada el ${fechaHora(sim.cerradaEn)}`}`)),
-    seccion('Resumen',
+      h('p', { class: 'ayuda' }, `Estrategia ${sim.estrategiaVersion}${sim.etiqueta && sim.etiqueta !== sim.estrategiaVersion ? ` (${sim.etiqueta})` : ''}`
+        + `${sim.principal ? ' · principal' : ''} · capital inicial ${euros(sim.capitalInicial)} · desde ${fechaHora(sim.creadaEn)}`
+        + `${sim.activa ? '' : ` · cerrada el ${fechaHora(sim.cerradaEn)}`}`),
       h('p', { class: 'cifra-grande' }, euros(b.metricas.valorCartera)),
       h('p', null, `Rentabilidad ${porcentaje(b.metricas.rentabilidad, { signo: true })} · saldo ${euros(b.metricas.saldo)} · `
         + `realizado ${euros(b.metricas.beneficioRealizado, { signo: true })} · no realizado ${euros(b.metricas.beneficioNoRealizado, { signo: true })}`),
@@ -196,10 +249,13 @@ export async function vistaBot(ctx) {
         claseFila: (f) => (f.ejecutada ? 'ejecutada' : undefined), exigirPin: ctx.exigirPin,
       }) : avisoDeError(decs.error),
       h('p', { class: 'ayuda' }, 'Incluye MANTENER y las compras o ventas no ejecutadas, con su motivo.')),
-    sim.activa ? seccion('Reinicio', reinicio(ctx, sim)) : null)
+    sim.activa ? seccion('Reinicio', reinicio(ctx, etiquetas)) : null)
   return {
     titulo: 'Bot',
     nodo,
-    montar: () => (curva.bot.length > 1 ? graficoCurva(lienzo, curva) : undefined),
+    montar: () => {
+      const limpiezas = [comparativa.montar?.(), curva.bot.length > 1 ? graficoCurva(lienzo, curva) : undefined]
+      return () => { for (const limpiar of limpiezas) limpiar?.() }
+    },
   }
 }

@@ -47,26 +47,34 @@ export function s(etiqueta, atributos, ...hijos) {
 }
 
 /**
- * Tabla accesible con título, cabeceras de columna y mensaje si no hay filas.
+ * Tabla accesible con título, cabeceras de columna y mensaje si no hay filas. Siempre va en un contenedor con
+ * desplazamiento horizontal (con sombra en el borde mientras quedan columnas por ver). `apilable`: por debajo de
+ * 680 px cada fila se pinta como una tarjeta con la cabecera de cada celda delante (data-etiqueta); los roles ARIA
+ * explícitos conservan la tabla para los lectores de pantalla aunque el CSS cambie su `display`.
  * @param {{ titulo: string, columnas: { clave: string, texto: string, numerica?: boolean }[],
- *   filas: Record<string, unknown>[], vacio?: string, claseFila?: (f: any) => string|undefined }} op
+ *   filas: Record<string, unknown>[], vacio?: string, claseFila?: (f: any) => string|undefined, apilable?: boolean }} op
  */
-export function tabla({ titulo, columnas, filas, vacio = 'Sin datos.', claseFila }) {
+export function tabla({ titulo, columnas, filas, vacio = 'Sin datos.', claseFila, apilable = false }) {
   if (filas.length === 0) return h('p', { class: 'vacio' }, vacio)
-  const cuerpo = h('tbody', null, filas.map((f) => filaTabla(columnas, f, claseFila)))
-  return h('div', { class: 'tabla-desplazable', tabindex: 0, role: 'region', 'aria-label': titulo },
-    h('table', null,
+  const rol = (/** @type {string} */ r) => (apilable ? r : null)
+  const cuerpo = h('tbody', { role: rol('rowgroup') }, filas.map((f) => filaTabla(columnas, f, claseFila, apilable)))
+  return h('div', { class: apilable ? 'tabla-desplazable tabla-apilable' : 'tabla-desplazable', tabindex: 0, role: 'region', 'aria-label': titulo },
+    h('table', { role: rol('table') },
       h('caption', { class: 'solo-lectores' }, titulo),
-      h('thead', null, h('tr', null, columnas.map((c) => h('th', { scope: 'col', class: c.numerica ? 'num' : null }, c.texto)))),
+      h('thead', { role: rol('rowgroup') }, h('tr', { role: rol('row') },
+        columnas.map((c) => h('th', { scope: 'col', class: c.numerica ? 'num' : null, role: rol('columnheader') }, c.texto)))),
       cuerpo))
 }
 
 /**
- * @param {{ clave: string, numerica?: boolean }[]} columnas @param {Record<string, unknown>} f
+ * Fila de `tabla`. Cada celda lleva su cabecera en data-etiqueta (las tarjetas de una tabla apilable la enseñan).
+ * @param {{ clave: string, texto?: string, numerica?: boolean }[]} columnas @param {Record<string, unknown>} f
  * @param {(f: any) => string|undefined} [claseFila]
+ * @param {boolean} [apilable] añade los roles ARIA de fila y celda
  */
-export const filaTabla = (columnas, f, claseFila) => h('tr', { class: claseFila?.(f) ?? null },
-  columnas.map((c) => h('td', { class: c.numerica ? 'num' : null }, /** @type {Hijo} */ (f[c.clave]))))
+export const filaTabla = (columnas, f, claseFila, apilable = false) => h('tr', { class: claseFila?.(f) ?? null, role: apilable ? 'row' : null },
+  columnas.map((c) => h('td', { class: c.numerica ? 'num' : null, 'data-etiqueta': c.texto ?? null, role: apilable ? 'cell' : null },
+    /** @type {Hijo} */ (f[c.clave]))))
 
 /**
  * Lista de pares etiqueta → valor (métricas).

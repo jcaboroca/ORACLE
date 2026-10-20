@@ -7,6 +7,9 @@ import { crear } from './familias/cruce.js'
 
 export const VERSION = 'v4'
 
+/** Nombre en la interfaz (Bot y Panel): no cumple el criterio del laboratorio. */
+export const ETIQUETA = 'Cruce de medias 1D (experimental)'
+
 const estrategia = crear({ rapida: 10, lenta: 50, stop: null }, VERSION)
 
 /** Señal: { familia: 'cruce', config: { rapida: 10, lenta: 50, stop: null } }. */
