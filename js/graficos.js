@@ -81,3 +81,30 @@ export function graficoCurva(contenedor, curva) {
   grafico.timeScale().fitContent()
   return () => grafico.remove()
 }
+
+/** Colores de las estrategias de la comparativa, en orden (comprar y mantener usa COLORES.hodl, discontinua). */
+export const COLORES_ESTRATEGIAS = Object.freeze(['#2dd4bf', '#60a5fa', '#c084fc', '#f472b6'])
+
+/**
+ * Curvas de capital de las estrategias en vivo y la de comprar y mantener, en el mismo gráfico.
+ * @param {HTMLElement} contenedor
+ * @param {ReturnType<typeof import('./series.js').curvasComparativa>} curvas
+ * @returns {() => void} limpieza
+ */
+export function graficoComparativa(contenedor, curvas) {
+  const L = libreria()
+  const grafico = L.createChart(contenedor, opcionesBase())
+  const euros = formatoNumero(0)
+  if (curvas.hodl.length > 0) {
+    grafico.addSeries(L.LineSeries, {
+      lineWidth: 2, lineStyle: 2, color: COLORES.hodl, priceLineVisible: false, priceFormat: euros, title: 'Comprar y mantener',
+    }).setData(curvas.hodl)
+  }
+  curvas.estrategias.forEach((e, i) => {
+    grafico.addSeries(L.LineSeries, {
+      lineWidth: 2, color: COLORES_ESTRATEGIAS[i % COLORES_ESTRATEGIAS.length], priceLineVisible: false, priceFormat: euros, title: e.etiqueta,
+    }).setData(e.puntos)
+  })
+  grafico.timeScale().fitContent()
+  return () => grafico.remove()
+}

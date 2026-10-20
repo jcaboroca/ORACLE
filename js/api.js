@@ -146,8 +146,10 @@ export function crearApi({
     resumen: () => pedir('GET', '/api/resumen'),
     /** @param {string} simbolo */
     moneda: (simbolo) => pedir('GET', `/api/moneda/${encodeURIComponent(simbolo)}`),
-    /** @param {number|null} [simulacion] sin valor: la activa */
+    /** @param {number|null} [simulacion] sin valor: la activa de la estrategia principal */
     bot: (simulacion = null) => pedir('GET', '/api/bot', { consulta: { simulacion } }),
+    /** Simulaciones activas lado a lado: métricas, curvas y comprar y mantener (una por estrategia en vivo). */
+    comparativa: () => pedir('GET', '/api/bot/comparativa'),
     /** @param {{ simulacion?: number|null, simbolo?: string|null, cursor?: number|null }} [op] */
     operaciones: ({ simulacion = null, simbolo = null, cursor = null } = {}) =>
       pedir('GET', '/api/bot/operaciones', { consulta: { simulacion, simbolo, cursor } }),
@@ -155,7 +157,7 @@ export function crearApi({
     decisiones: ({ simulacion = null, simbolo = null, cursor = null } = {}) =>
       pedir('GET', '/api/bot/decisiones', { consulta: { simulacion, simbolo, cursor } }),
     simulaciones: () => pedir('GET', '/api/simulaciones'),
-    /** @param {number} capitalInicial */
+    /** Cierra todas las simulaciones activas y abre una por estrategia en vivo. @param {number} capitalInicial */
     reiniciar: (capitalInicial) => pedir('POST', '/api/bot/reiniciar', { cuerpo: { capital_inicial: capitalInicial, confirmar: true } }),
     analizar: () => pedir('POST', '/api/analizar', { plazo: plazoAnalizarMs }),
   }

@@ -217,3 +217,43 @@ export function notaBacktest(backtests) {
   }
   return `Alguna estrategia supera a comprar y mantener en este periodo, pero sin noticias ni derivados y con costes aproximados. ${futuro}`
 }
+
+/**
+ * Filas de la tabla de la comparativa (GET /api/bot/comparativa): una por simulación activa, en el orden de la API,
+ * y al final comprar y mantener. `id` (null en comprar y mantener) sirve para enlazar el detalle.
+ * @param {any} c
+ * @returns {{ id: number|null, estrategia: string, valor: string, rentabilidad: string, caida: string, operaciones: string,
+ *   clase: string, principal: boolean }[]}
+ */
+export function filasComparativa(c) {
+  const filas = (Array.isArray(c?.simulaciones) ? c.simulaciones : []).map((/** @type {any} */ s) => ({
+    id: s.id,
+    estrategia: `${s.etiqueta && s.etiqueta !== s.estrategiaVersion ? `${s.estrategiaVersion} · ${s.etiqueta}` : s.estrategiaVersion}`
+      + `${s.principal ? ' (principal)' : ''}`,
+    valor: euros(s.valorCartera),
+    rentabilidad: porcentaje(s.rentabilidad, { signo: true }),
+    caida: porcentaje(caida(s.drawdownMaximo)),
+    operaciones: entero(s.operaciones),
+    clase: claseSigno(s.rentabilidad),
+    principal: s.principal === true,
+  }))
+  const hodl = c?.resumenHodl
+  if (hodl) {
+    filas.push({
+      id: null, estrategia: 'Comprar y mantener', valor: euros(hodl.valor), rentabilidad: porcentaje(hodl.rentabilidad, { signo: true }),
+      caida: porcentaje(caida(hodl.drawdownMaximo)), operaciones: '—', clase: claseSigno(hodl.rentabilidad), principal: false,
+    })
+  }
+  return filas
+}
+
+/**
+ * Qué estrategia da el consejo del Panel (`estrategiaPrincipal` de GET /api/resumen). '' si no viene (Worker anterior).
+ * @param {any} principal { version, etiqueta, enVivo }
+ */
+export function textoConsejo(principal) {
+  if (typeof principal?.version !== 'string' || principal.version === '') return ''
+  const nombre = principal.etiqueta && principal.etiqueta !== principal.version ? `${principal.version} (${principal.etiqueta})` : principal.version
+  const enVivo = typeof principal.enVivo === 'number' && principal.enVivo > 1 ? `, la principal de las ${principal.enVivo} en vivo` : ''
+  return `Consejo de la estrategia ${nombre}${enVivo}.`
+}

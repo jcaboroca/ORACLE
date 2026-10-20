@@ -132,3 +132,30 @@ const TICKS = {
  * @param {number} tipo
  */
 export const etiquetaTick = (segundos, tipo) => (TICKS[tipo] ?? TICKS[3]).format(segundos * 1000)
+
+/**
+ * Puntos { t (ms), valor } → línea del gráfico en segundos estrictamente crecientes (si se repite un segundo,
+ * gana el último punto). Descarta puntos sin número.
+ * @param {{ t: number, valor: number }[]} puntos
+ * @returns {PuntoLinea[]}
+ */
+function lineaDeCurva(puntos) {
+  /** @type {Map<number, number>} */
+  const porTiempo = new Map()
+  for (const p of puntos) if (Number.isFinite(p?.t) && Number.isFinite(p?.valor)) porTiempo.set(aSegundos(p.t), p.valor)
+  return [...porTiempo.keys()].sort((a, b) => a - b).map((time) => ({ time, value: /** @type {number} */ (porTiempo.get(time)) }))
+}
+
+/**
+ * Curvas de GET /api/bot/comparativa para el gráfico: una línea por simulación (en el orden de la API) y la de
+ * comprar y mantener.
+ * @param {{ simulaciones?: { estrategiaVersion: string, etiqueta?: string, curva?: { t: number, valor: number }[] }[],
+ *   hodl?: { t: number, valor: number }[] }} c
+ * @returns {{ estrategias: { etiqueta: string, puntos: PuntoLinea[] }[], hodl: PuntoLinea[] }}
+ */
+export function curvasComparativa(c) {
+  return {
+    estrategias: (c.simulaciones ?? []).map((s) => ({ etiqueta: s.etiqueta || s.estrategiaVersion, puntos: lineaDeCurva(s.curva ?? []) })),
+    hodl: lineaDeCurva(c.hodl ?? []),
+  }
+}
