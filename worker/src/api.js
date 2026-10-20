@@ -3,6 +3,7 @@
 // con los cambios del plan 5 (varias estrategias en vivo y GET /api/bot/comparativa).
 // Precios e importes en €, porcentajes como fracción (0,05 = 5 %), instantes en ms desde epoch (UTC).
 // No existe ninguna ruta que envíe órdenes a un exchange.
+import { FACTOR_SIN_STOP, FACTOR_SIN_TP } from '../../core/bot.js'
 import { calcularMetricas, metricasPorMoneda } from '../../core/metricas.js'
 import { HORA } from '../../core/velas.js'
 import { cabecerasCors, leerOrigenes, verificarPin } from './auth.js'
@@ -82,12 +83,25 @@ export const aOperacion = (o) => ({
   saldoTras: o.saldo_tras, pnlNeto: o.pnl_neto, estrategiaVersion: o.estrategia_version, creadaEn: o.creada_en,
 })
 
-/** @param {any} p @param {number} precioActual */
-export function aPosicion(p, precioActual) {
+/**
+ * Margen para reconocer los marcadores inalcanzables de core/bot.js (entrada × FACTOR_SIN_STOP / × FACTOR_SIN_TP)
+ * aunque la estrategia de la simulación ya no exista: ningún nivel real queda a 1000 veces de la entrada.
+ */
+const MARGEN_MARCADOR = 1000
+
+/**
+ * stopLoss/takeProfit son null si el nivel está desactivado (D1 guarda un marcador inalcanzable porque las
+ * columnas son NOT NULL): por los PARAMETROS_BOT de la estrategia de la simulación o, si no se conocen, por magnitud.
+ * @param {any} p @param {number} precioActual
+ * @param {{ sinStopLoss?: boolean, sinTakeProfit?: boolean }} [niveles] PARAMETROS_BOT de la estrategia
+ */
+export function aPosicion(p, precioActual, niveles = {}) {
   const valorActual = p.unidades * precioActual
+  const sinStop = niveles.sinStopLoss === true || p.stop_loss <= p.precio_entrada * FACTOR_SIN_STOP * MARGEN_MARCADOR
+  const sinTp = niveles.sinTakeProfit === true || p.take_profit >= p.precio_entrada * FACTOR_SIN_TP / MARGEN_MARCADOR
   return {
     id: p.id, simbolo: p.simbolo, velaEntrada: p.vela_entrada, precioEntrada: p.precio_entrada, unidades: p.unidades,
-    coste: p.coste, stopLoss: p.stop_loss, takeProfit: p.take_profit, precioActual, valorActual,
+    coste: p.coste, stopLoss: sinStop ? null : p.stop_loss, takeProfit: sinTp ? null : p.take_profit, precioActual, valorActual,
     pnlNoRealizado: valorActual - p.coste, pnlNoRealizadoPct: valorActual / p.coste - 1,
   }
 }
@@ -222,11 +236,24 @@ async function moneda({ env, ahora, params, vivo }) {
   }
 }
 
+/**
+ * PARAMETROS_BOT de la estrategia de una simulación; {} si la versión ya no existe (aPosicion cae a la magnitud).
+ * @param {import('./vivo.js').Vivo} vivo @param {string} version
+ */
+function parametrosBotDe(vivo, version) {
+  try {
+    return vivo.estrategia(version).PARAMETROS_BOT
+  } catch {
+    return {}
+  }
+}
+
 /** @param {Contexto} c @returns {Promise<Respuesta>} */
 async function bot({ env, url, vivo }) {
   const sim = await simulacionPedida(env.DB, url, vivo)
   const d = await repo.datosBot(env.DB, sim.id, CURVA_HORARIA_MS)
-  const abiertas = d.abiertas.map((p) => aPosicion(p, p.precio_actual ?? p.precio_entrada))
+  const niveles = parametrosBotDe(vivo, sim.estrategia_version)
+  const abiertas = d.abiertas.map((p) => aPosicion(p, p.precio_actual ?? p.precio_entrada, niveles))
   const operaciones = d.operaciones.map((o) => ({
     tipo: o.lado, simbolo: o.simbolo, comision: o.comision, deslizamiento: o.deslizamiento, pnlNeto: o.pnl_neto ?? undefined,
   }))

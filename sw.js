@@ -3,7 +3,7 @@
 // Estrategia: red primero (una versión nueva entra sin trucos) y, sin red, la copia guardada.
 // Al cambiar cualquier archivo de ESTRUCTURA, sube VERSION.
 
-const VERSION = 'oracle-v4'
+const VERSION = 'oracle-v5'
 const ESTRUCTURA = [
   './',
   './index.html',

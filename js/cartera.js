@@ -81,7 +81,7 @@ export function frenteAHodl(rentabilidad, rentabilidadHodl) {
   return { texto, clase: claseSigno(diferencia), bate }
 }
 
-/** @param {any} p Posicion */
+/** @param {any} p Posicion; stopLoss/takeProfit null = la estrategia no usa ese nivel */
 export const filaPosicion = (p) => ({
   simbolo: p.simbolo,
   desde: fechaHora(p.velaEntrada),
@@ -90,8 +90,8 @@ export const filaPosicion = (p) => ({
   unidades: numero(p.unidades, 6),
   coste: euros(p.coste),
   valor: euros(p.valorActual),
-  stopLoss: precio(p.stopLoss),
-  takeProfit: precio(p.takeProfit),
+  stopLoss: p.stopLoss === null ? 'sin stop-loss' : precio(p.stopLoss),
+  takeProfit: p.takeProfit === null ? 'sin take-profit' : precio(p.takeProfit),
   pnl: `${euros(p.pnlNoRealizado, { signo: true })} (${porcentaje(p.pnlNoRealizadoPct, { signo: true })})`,
   clase: claseSigno(p.pnlNoRealizado),
 })

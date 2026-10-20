@@ -719,6 +719,12 @@ consume el tope global. CORS solo para
 | POST | `/api/bot/reiniciar` `{capital_inicial, confirmar: true}` | nueva simulación |
 | POST | `/api/analizar` | refresca señales (no opera); 429 si < 5 min |
 
+En las posiciones abiertas de `GET /api/bot`, `stopLoss` y `takeProfit` (€) son `null` cuando la
+estrategia de la simulación desactiva ese nivel (`PARAMETROS_BOT.sinStopLoss` / `sinTakeProfit`, como
+v3–v5): D1 guarda entonces un marcador inalcanzable (entrada × 10⁻⁶ / × 10⁶, las columnas son NOT NULL)
+que nunca sale de la API; si la estrategia ya no existe, el marcador se reconoce por su magnitud. La PWA
+muestra «sin stop-loss» / «sin take-profit».
+
 No existe ninguna ruta que envíe órdenes a un exchange. Secrets: `ORACLE_PIN`,
 `GROQ_API_KEY`, `GEMINI_API_KEY`. Vars: `MONEDAS`, `LLM_MODELO_GROQ`, `LLM_MODELO_GEMINI`.
 

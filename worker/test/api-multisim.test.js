@@ -1,12 +1,17 @@
 // @ts-check
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
+import { FACTOR_SIN_STOP, FACTOR_SIN_TP, nivelesSalida } from '../../core/bot.js'
+import * as v1 from '../../core/estrategia-v1.js'
+import { estrategia } from '../../core/estrategias.js'
 import { resumirCurva } from '../../core/metricas.js'
-import { atender, submuestrearCurva } from '../src/api.js'
+import { aPosicion, atender, submuestrearCurva } from '../src/api.js'
 import { ejecutarMercado } from '../src/ejecuciones/mercado.js'
+import { crearSimulacion } from '../src/repositorio.js'
+import { crearVivo } from '../src/vivo.js'
 import { crearD1 } from './d1.js'
 import { ahoraDe, crearEscenario, fetchEscenario, sinEspera } from './escenario.js'
-import { vivoDePrueba } from './vivo.js'
+import { v1b, vivoDePrueba } from './vivo.js'
 
 const PIN = '4815162342'
 /** v1, v2 y v1b en vivo; la principal, v2. */
@@ -127,5 +132,64 @@ describe('API con varias estrategias en vivo', () => {
     assert.deepEqual(comparativa.cuerpo.simulaciones.map((/** @type {any} */ s) => [s.id, s.valorCartera, s.operaciones, s.curva]), [
       [4, 5000, 0, []], [5, 5000, 0, []], [6, 5000, 0, []],
     ])
+  })
+})
+
+describe('posiciones abiertas con niveles de salida desactivados', () => {
+  /**
+   * Una simulación activa de `version` con una posición abierta en ETH (entrada 10 €) cuyos niveles salen de
+   * nivelesSalida, como los guarda el bot (marcadores inalcanzables si el nivel está desactivado).
+   * @param {ReturnType<typeof crearD1>} db @param {string} version @param {any} parametros
+   */
+  async function conPosicion(db, version, parametros) {
+    const sim = await crearSimulacion(db, { capitalInicial: 10_000, version, ahora: 0 })
+    const { stopLoss, takeProfit } = nivelesSalida(10, 0.02, parametros)
+    await db.prepare(
+      `INSERT INTO posiciones (simulacion_id, simbolo, estado, vela_entrada, precio_entrada, unidades, coste, stop_loss, take_profit)
+       VALUES (?, 'ETH', 'abierta', 0, 10, 100, 1001, ?, ?)`,
+    ).bind(sim.id, stopLoss, takeProfit).run()
+    return sim.id
+  }
+
+  test('GET /api/bot: stopLoss/takeProfit null si la estrategia de la simulación desactiva ese nivel; reales si no', async () => {
+    const db = crearD1()
+    const sinTp = Object.freeze({ ...v1b, VERSION: 'v1c', PARAMETROS_BOT: Object.freeze({ ...v1.PARAMETROS_BOT, sinTakeProfit: true }) })
+    const vivo = crearVivo({ versiones: ['v1', 'v3', 'v1c'], principal: 'v1', estrategia: (v) => (v === 'v1c' ? sinTp : estrategia(v)) })
+    const ids = {
+      v1: await conPosicion(db, 'v1', v1.PARAMETROS_BOT),
+      v3: await conPosicion(db, 'v3', estrategia('v3').PARAMETROS_BOT),
+      v1c: await conPosicion(db, 'v1c', sinTp.PARAMETROS_BOT),
+    }
+    const niveles = async (/** @type {number} */ id) => {
+      const [p] = (await pedir(db, `/api/bot?simulacion=${id}`, { vivo })).cuerpo.abiertas
+      assert.deepEqual(Object.keys(p), [
+        'id', 'simbolo', 'velaEntrada', 'precioEntrada', 'unidades', 'coste', 'stopLoss', 'takeProfit', 'precioActual',
+        'valorActual', 'pnlNoRealizado', 'pnlNoRealizadoPct',
+      ])
+      return [p.stopLoss, p.takeProfit]
+    }
+    const real = nivelesSalida(10, 0.02, v1.PARAMETROS_BOT)
+    assert.deepEqual(await niveles(ids.v1), [real.stopLoss, real.takeProfit])
+    assert.deepEqual(await niveles(ids.v3), [null, null])
+    assert.deepEqual(await niveles(ids.v1c), [real.stopLoss, null])
+  })
+
+  test('GET /api/bot: si la estrategia ya no existe, los marcadores inalcanzables también salen como null', async () => {
+    const db = crearD1()
+    const id = await conPosicion(db, 'v9', { ...v1.PARAMETROS_BOT, sinStopLoss: true, sinTakeProfit: true })
+    const [p] = (await pedir(db, `/api/bot?simulacion=${id}`)).cuerpo.abiertas
+    assert.deepEqual([p.stopLoss, p.takeProfit], [null, null])
+  })
+
+  test('aPosicion: null por parámetros de la estrategia o por magnitud de marcador; niveles reales intactos', () => {
+    const fila = { id: 1, simbolo: 'ETH', vela_entrada: 0, precio_entrada: 10, unidades: 1, coste: 10, stop_loss: 9, take_profit: 12 }
+    const marcadores = { ...fila, stop_loss: 10 * FACTOR_SIN_STOP, take_profit: 10 * FACTOR_SIN_TP }
+    const niveles = (/** @type {any} */ p) => [p.stopLoss, p.takeProfit]
+    assert.deepEqual(niveles(aPosicion(fila, 11)), [9, 12])
+    assert.deepEqual(niveles(aPosicion(fila, 11, { sinStopLoss: false, sinTakeProfit: false })), [9, 12])
+    assert.deepEqual(niveles(aPosicion(fila, 11, { sinStopLoss: true })), [null, 12])
+    assert.deepEqual(niveles(aPosicion(fila, 11, { sinTakeProfit: true })), [9, null])
+    assert.deepEqual(niveles(aPosicion(marcadores, 11)), [null, null])
+    assert.deepEqual(niveles(aPosicion({ ...fila, stop_loss: 0.5, take_profit: 500 }, 11)), [0.5, 500], 'lejanos pero posibles')
   })
 })

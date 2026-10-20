@@ -59,6 +59,15 @@ describe('bot en la interfaz', () => {
     assert.equal(ops.find((o) => o.lado === 'Compra')?.pnl, '')
   })
 
+  test('posición de una estrategia sin stop-loss ni take-profit (null en la API): «sin stop-loss» / «sin take-profit»', async () => {
+    const { bot } = await botReal()
+    const base = bot.abiertas[0]
+    const sinNiveles = filaPosicion({ ...base, stopLoss: null, takeProfit: null })
+    assert.deepEqual([sinNiveles.stopLoss, sinNiveles.takeProfit], ['sin stop-loss', 'sin take-profit'])
+    const soloStop = filaPosicion({ ...base, takeProfit: null })
+    assert.deepEqual([soloStop.stopLoss, soloStop.takeProfit], [`9,65${ESP}€`, 'sin take-profit'])
+  })
+
   test('frente a comprar y mantener, en puntos', () => {
     assert.deepEqual(frenteAHodl(-0.185108990116729, 0.19968549372488598),
       { texto: `38,48 puntos por debajo de comprar y mantener (+19,97${ESP}%).`, clase: 'baja', bate: false })
