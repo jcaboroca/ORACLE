@@ -1,7 +1,7 @@
 // @ts-check
 // F2 Ruptura de Donchian 1D (spec del laboratorio §3): COMPRAR si el cierre supera el máximo de los N
 // días previos, VENDER si cae por debajo del mínimo de los M días previos; MANTENER entre ambos.
-import { PERIODO_ATR, enteroPositivo, parametrosBotDiarios, prepararDiario, senalFamilia, stopValido } from './comun.js'
+import { PERIODO_ATR, VARIANTE_SOLO_TECNICO, enteroPositivo, parametrosBotDiarios, prepararDiario, senalFamilia, stopValido } from './comun.js'
 
 export const FAMILIA = 'ruptura'
 
@@ -27,6 +27,7 @@ export function crear(config, version) {
   const necesarias = Math.max(entrada + 1, salida + 1, PERIODO_ATR + 1)
   return Object.freeze({
     VERSION: version,
+    VARIANTE_BACKTEST: VARIANTE_SOLO_TECNICO,
     PARAMETROS: Object.freeze({ familia: FAMILIA, config: Object.freeze({ entrada, salida, stop }) }),
     PARAMETROS_BOT: parametrosBotDiarios(stop),
     /** @param {import('../hora.js').EntradaSenal} e */

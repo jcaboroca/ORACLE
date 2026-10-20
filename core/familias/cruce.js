@@ -2,7 +2,7 @@
 // F1 Cruce de medias 1D (spec del laboratorio §3): COMPRAR mientras la EMA rápida está por encima
 // de la lenta, VENDER mientras está por debajo. Decide al cierre diario con velas 1D cerradas.
 import { ema, ultimo } from '../indicadores.js'
-import { PERIODO_ATR, enteroPositivo, parametrosBotDiarios, prepararDiario, senalFamilia, stopValido } from './comun.js'
+import { PERIODO_ATR, VARIANTE_SOLO_TECNICO, enteroPositivo, parametrosBotDiarios, prepararDiario, senalFamilia, stopValido } from './comun.js'
 
 export const FAMILIA = 'cruce'
 
@@ -29,6 +29,7 @@ export function crear(config, version) {
   const necesarias = Math.max(lenta, PERIODO_ATR + 1)
   return Object.freeze({
     VERSION: version,
+    VARIANTE_BACKTEST: VARIANTE_SOLO_TECNICO,
     PARAMETROS: Object.freeze({ familia: FAMILIA, config: Object.freeze({ rapida, lenta, stop }) }),
     PARAMETROS_BOT: parametrosBotDiarios(stop),
     /** @param {import('../hora.js').EntradaSenal} entrada */

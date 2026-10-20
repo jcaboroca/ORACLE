@@ -12,6 +12,24 @@ import { HORA, VENTANA } from './velas.js'
 const MINUTO_CRON = 3 * 60_000
 const DIA = 24 * HORA
 
+/** Variante de las estrategias que no declaran VARIANTE_BACKTEST (v1, v2): técnico + Fear & Greed. */
+export const VARIANTE_POR_DEFECTO = 'tecnico+fng'
+
+/** @type {Readonly<Record<string, string>>} */
+const AVISOS = Object.freeze({
+  'tecnico+fng': 'Simulación con datos históricos. Variante técnico + Fear & Greed: sin noticias ni derivados (no hay histórico gratuito fiable). No es asesoramiento financiero ni garantía de beneficio.',
+  tecnico: 'Simulación con datos históricos. Variante solo técnico: la estrategia solo usa velas, sin noticias, derivados ni Fear & Greed. No es asesoramiento financiero ni garantía de beneficio.',
+})
+
+/**
+ * Aviso de data/backtest-vN.json según la variante del resultado.
+ * @param {string} variante
+ */
+export function avisoBacktest(variante) {
+  if (!Object.hasOwn(AVISOS, variante)) throw new RangeError(`Variante de backtest desconocida: ${variante}`)
+  return AVISOS[variante]
+}
+
 /**
  * @param {{ series: Record<string, SerieMoneda>, fng: { t: number, valor: number }[],
  *   desde: number, hasta: number, capitalInicial?: number, ventana?: number, estrategia: Estrategia }} entrada
@@ -87,7 +105,7 @@ export function ejecutarBacktest({ series, fng, desde, hasta, capitalInicial = 1
   }))
   return {
     version: estrategia.VERSION,
-    variante: 'tecnico+fng',
+    variante: estrategia.VARIANTE_BACKTEST ?? VARIANTE_POR_DEFECTO,
     parametros: { estrategia: estrategia.PARAMETROS, bot: estrategia.PARAMETROS_BOT, ventana },
     desde,
     hasta,

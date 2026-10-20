@@ -4,7 +4,7 @@
 // La señal no conoce la posición del bot: el plazo se cuenta desde la última vela 1D que cumplió la
 // entrada (si la entrada se repite con la posición abierta, el plazo se reinicia).
 import { rsi, sma } from '../indicadores.js'
-import { PERIODO_ATR, enteroPositivo, parametrosBotDiarios, prepararDiario, senalFamilia, stopValido } from './comun.js'
+import { PERIODO_ATR, VARIANTE_SOLO_TECNICO, enteroPositivo, parametrosBotDiarios, prepararDiario, senalFamilia, stopValido } from './comun.js'
 
 export const FAMILIA = 'caidas'
 export const PERIODO_TENDENCIA = 200
@@ -34,6 +34,7 @@ export function crear(config, version) {
   const necesarias = Math.max(PERIODO_TENDENCIA, PERIODO_ATR + 1)
   return Object.freeze({
     VERSION: version,
+    VARIANTE_BACKTEST: VARIANTE_SOLO_TECNICO,
     PARAMETROS: Object.freeze({ familia: FAMILIA, config: Object.freeze({ umbralRsi, dias, stop }) }),
     PARAMETROS_BOT: parametrosBotDiarios(stop),
     /** @param {import('../hora.js').EntradaSenal} e */

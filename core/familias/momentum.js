@@ -1,7 +1,7 @@
 // @ts-check
 // F3 Momentum 1D (spec del laboratorio §3): COMPRAR si la rentabilidad de los últimos L días es > 0,
 // VENDER si es ≤ 0. Revisión diaria o semanal (solo los lunes a las 00:03 UTC, con el cierre del domingo).
-import { PERIODO_ATR, enteroPositivo, parametrosBotDiarios, prepararDiario, senalFamilia, stopValido } from './comun.js'
+import { PERIODO_ATR, VARIANTE_SOLO_TECNICO, enteroPositivo, parametrosBotDiarios, prepararDiario, senalFamilia, stopValido } from './comun.js'
 
 export const FAMILIA = 'momentum'
 export const REVISIONES = Object.freeze(['diaria', 'semanal'])
@@ -29,6 +29,7 @@ export function crear(config, version) {
   const necesarias = Math.max(dias + 1, PERIODO_ATR + 1)
   return Object.freeze({
     VERSION: version,
+    VARIANTE_BACKTEST: VARIANTE_SOLO_TECNICO,
     PARAMETROS: Object.freeze({ familia: FAMILIA, config: Object.freeze({ dias, revision, stop }) }),
     PARAMETROS_BOT: parametrosBotDiarios(stop),
     /** @param {import('../hora.js').EntradaSenal} e */

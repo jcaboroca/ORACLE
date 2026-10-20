@@ -16,5 +16,7 @@ const estrategia = crear({ dias: 30, revision: 'semanal', stop: null }, VERSION)
 export const PARAMETROS = estrategia.PARAMETROS
 /** Bot: los de v1 decidiendo al cierre 1D (00:03 UTC), sin take-profit y sin stop de emergencia. */
 export const PARAMETROS_BOT = estrategia.PARAMETROS_BOT
+/** Backtest: 'tecnico' (solo velas: ni noticias, ni derivados, ni Fear & Greed). */
+export const VARIANTE_BACKTEST = estrategia.VARIANTE_BACKTEST
 /** Señal de una moneda en el instante `ahora`: COMPRAR si rinde > 0 en 30 días, VENDER si no; solo los lunes. */
 export const calcularSenal = estrategia.calcularSenal

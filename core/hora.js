@@ -24,9 +24,10 @@ import { cerradasHasta } from './velas.js'
  *   ausentes: string[], detalle: object }} Senal
  */
 /**
- * Módulo de estrategia (core/estrategia-vN.js): ver core/estrategias.js.
+ * Módulo de estrategia (core/estrategia-vN.js): ver core/estrategias.js. VARIANTE_BACKTEST (opcional):
+ * qué datos usa en el backtest ('tecnico' = solo velas); sin ella, 'tecnico+fng' (core/backtest.js).
  * @typedef {{ VERSION: string, PARAMETROS: object, PARAMETROS_BOT: import('./bot.js').ParametrosBot,
- *   calcularSenal: (entrada: EntradaSenal) => Senal }} Estrategia
+ *   calcularSenal: (entrada: EntradaSenal) => Senal, VARIANTE_BACKTEST?: string }} Estrategia
  */
 
 /**

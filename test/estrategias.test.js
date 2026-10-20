@@ -33,6 +33,11 @@ describe('registro de estrategias', () => {
   test('la estrategia activa está registrada', () => {
     assert.ok(Object.hasOwn(ESTRATEGIAS, ESTRATEGIA_ACTIVA))
   })
+  test('variante del backtest: v1 y v2 no la declaran (técnico + Fear & Greed); v3–v5 son solo técnico', () => {
+    assert.equal(Object.hasOwn(v1, 'VARIANTE_BACKTEST'), false)
+    assert.equal(Object.hasOwn(v2, 'VARIANTE_BACKTEST'), false)
+    for (const v of ['v3', 'v4', 'v5']) assert.equal(estrategia(v).VARIANTE_BACKTEST, 'tecnico', v)
+  })
   test('v2 está registrada (no superó a v1 en TEST, spec §6.6) y v1 sigue disponible', () => {
     assert.equal(estrategia('v2'), v2)
     assert.equal(estrategia('v1'), v1)

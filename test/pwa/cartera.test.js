@@ -125,6 +125,13 @@ describe('backtest en la interfaz', () => {
     assert.equal(l.curva.length, b.curvaDiaria.length)
     assert.match(l.aviso, /No es asesoramiento financiero ni garantía de beneficio/)
     assert.equal(lecturaBacktest(backtest('v2')).cadencia, 'una vez al día (00:00 UTC)')
+    assert.equal(lecturaBacktest(backtest('v2')).variante, 'técnico + Fear & Greed')
+    for (const v of ['v3', 'v4', 'v5']) {
+      const bv = backtest(v)
+      assert.equal(bv.variante, 'tecnico', v)
+      assert.equal(lecturaBacktest(bv).variante, 'solo técnico', v)
+      assert.doesNotMatch(bv.aviso, /Variante técnico \+ Fear & Greed/, v)
+    }
   })
 
   test('recuentos de decisiones y de cierres por motivo', () => {

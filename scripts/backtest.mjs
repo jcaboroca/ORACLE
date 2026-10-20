@@ -4,7 +4,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { ejecutarBacktest } from '../core/backtest.js'
+import { avisoBacktest, ejecutarBacktest } from '../core/backtest.js'
 import { ESTRATEGIA_ACTIVA, estrategia as obtenerEstrategia } from '../core/estrategias.js'
 import { HORA } from '../core/velas.js'
 import { DIA, RAIZ, descargarFng, descargarVelas } from './datos.mjs'
@@ -43,7 +43,7 @@ const inicioCalculo = Date.now()
 const resultado = ejecutarBacktest({ series, fng, desde, hasta, capitalInicial, estrategia })
 const salida = {
   generadoEn: new Date().toISOString(),
-  aviso: 'Simulación con datos históricos. Variante técnico + Fear & Greed: sin noticias ni derivados (no hay histórico gratuito fiable). No es asesoramiento financiero ni garantía de beneficio.',
+  aviso: avisoBacktest(resultado.variante),
   ...resultado,
 }
 const destino = join(RAIZ, 'data', `backtest-${resultado.version}.json`)

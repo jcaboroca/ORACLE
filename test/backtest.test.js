@@ -1,8 +1,9 @@
 // @ts-check
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { ejecutarBacktest } from '../core/backtest.js'
+import { VARIANTE_POR_DEFECTO, avisoBacktest, ejecutarBacktest } from '../core/backtest.js'
 import * as v1 from '../core/estrategia-v1.js'
+import { estrategia } from '../core/estrategias.js'
 import { HORA, VENTANA } from '../core/velas.js'
 import { serie } from './ayudantes.js'
 
@@ -43,7 +44,22 @@ describe('ejecutarBacktest', () => {
   })
   test('etiqueta variante y versión', () => {
     assert.equal(r.variante, 'tecnico+fng')
+    assert.equal(VARIANTE_POR_DEFECTO, 'tecnico+fng')
     assert.equal(r.version, 'v1')
+  })
+  test('la variante sale de la estrategia: VARIANTE_BACKTEST si la declara (v3–v5: solo técnico)', () => {
+    const tecnica = { ...v1, VERSION: 'vtecnica', VARIANTE_BACKTEST: 'tecnico' }
+    assert.equal(ejecutarBacktest({ series, fng, desde, hasta: desde + 2 * DIA, estrategia: tecnica }).variante, 'tecnico')
+    for (const v of ['v3', 'v4', 'v5']) {
+      const e = estrategia(v)
+      assert.equal(ejecutarBacktest({ series, fng, desde, hasta: desde + 2 * DIA, estrategia: e }).variante, 'tecnico', v)
+    }
+  })
+  test('aviso del JSON según la variante; una variante desconocida lanza RangeError', () => {
+    assert.match(avisoBacktest('tecnico+fng'), /Variante técnico \+ Fear & Greed/)
+    assert.match(avisoBacktest('tecnico'), /Variante solo técnico: .*sin noticias, derivados ni Fear & Greed/)
+    for (const v of ['tecnico+fng', 'tecnico']) assert.match(avisoBacktest(v), /No es asesoramiento financiero ni garantía de beneficio\.$/)
+    assert.throws(() => avisoBacktest('otra'), RangeError)
   })
   test('los parámetros publicados son los de la estrategia recibida', () => {
     assert.equal(r.parametros.estrategia, v1.PARAMETROS)

@@ -163,7 +163,7 @@ export async function vistaBacktest(ctx) {
       columnas: [{ clave: 'veredicto', texto: 'Señal' }, { clave: 'motivo', texto: 'Decisión' }, { clave: 'cantidad', texto: 'Horas', numerica: true }],
       filas: l.decisiones,
     })),
-    // El aviso de data/backtest-vN.json habla de la variante técnico + Fear & Greed: no vale para las del laboratorio.
+    // Las del laboratorio llevan su propio texto (velas diarias); el resto, el aviso del JSON y la nota de los pesos.
     h('p', { class: 'ayuda' }, typeof familia === 'string'
       ? 'Simulación con datos históricos. Esta estrategia del laboratorio solo usa análisis técnico de las velas diarias: '
         + 'ni noticias, ni derivados, ni Fear & Greed. No es asesoramiento financiero ni garantía de beneficio.'

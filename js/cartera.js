@@ -155,7 +155,7 @@ export function validarCapital(texto) {
 }
 
 /** @type {Record<string, string>} */
-const VARIANTES = { 'tecnico+fng': 'técnico + Fear & Greed' }
+const VARIANTES = { 'tecnico+fng': 'técnico + Fear & Greed', tecnico: 'solo técnico' }
 
 /**
  * Recuento de decisiones del backtest ('COMPRAR:abierta' → n) en filas, de más a menos frecuente.

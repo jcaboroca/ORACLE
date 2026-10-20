@@ -17,6 +17,12 @@ import { cerradasHasta, esFresca } from '../velas.js'
 export const PERIODO_ATR = 14
 
 /**
+ * Variante del backtest de las familias diarias: solo velas, sin noticias, derivados ni Fear & Greed
+ * (core/backtest.js la publica en data/backtest-vN.json).
+ */
+export const VARIANTE_SOLO_TECNICO = 'tecnico'
+
+/**
  * Bot de las familias F1–F4: los parámetros de v1 decidiendo una vez al día (cierre 1D, 00:03 UTC),
  * sin take-profit y con un stop de emergencia de `stop` × ATR14 1D fijado al abrir; sin stop si es null.
  * @param {number|null} stop

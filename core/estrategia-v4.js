@@ -16,5 +16,7 @@ const estrategia = crear({ rapida: 10, lenta: 50, stop: null }, VERSION)
 export const PARAMETROS = estrategia.PARAMETROS
 /** Bot: los de v1 decidiendo al cierre 1D (00:03 UTC), sin take-profit y sin stop de emergencia. */
 export const PARAMETROS_BOT = estrategia.PARAMETROS_BOT
+/** Backtest: 'tecnico' (solo velas: ni noticias, ni derivados, ni Fear & Greed). */
+export const VARIANTE_BACKTEST = estrategia.VARIANTE_BACKTEST
 /** Señal de una moneda en el instante `ahora`: COMPRAR con EMA10 > EMA50 1D, VENDER con EMA10 < EMA50. */
 export const calcularSenal = estrategia.calcularSenal
