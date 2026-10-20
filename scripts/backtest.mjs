@@ -1,18 +1,13 @@
 // @ts-check
 // npm run backtest -- [--estrategia v1] [--desde AAAA-MM-DD] [--hasta AAAA-MM-DD] [--monedas BTC,ETH] [--capital 10000]
 // Descarga histórico real de Binance y Fear & Greed (con caché local) y ejecuta core/backtest.js.
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { ejecutarBacktest } from '../core/backtest.js'
 import { ESTRATEGIA_ACTIVA, estrategia as obtenerEstrategia } from '../core/estrategias.js'
-import { HORA, desdeBinance } from '../core/velas.js'
-
-const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
-const CACHE = join(RAIZ, 'scripts', '.cache')
-const DIA = 24 * HORA
-const BINANCE = 'https://data-api.binance.vision/api/v3/klines'
+import { HORA } from '../core/velas.js'
+import { DIA, RAIZ, descargarFng, descargarVelas } from './datos.mjs'
 
 const { values } = parseArgs({
   options: {
@@ -29,60 +24,6 @@ const desde = values.desde ? Date.parse(`${values.desde}T00:00:00Z`) : hasta - 7
 const monedas = values.monedas.split(',').map((m) => m.trim().toUpperCase())
 const capitalInicial = Number(values.capital)
 
-/**
- * @param {string} clave
- * @param {() => Promise<unknown>} obtener
- */
-async function conCache(clave, obtener) {
-  const ruta = join(CACHE, `${clave}.json`)
-  try {
-    return JSON.parse(await readFile(ruta, 'utf8'))
-  } catch {
-    const datos = await obtener()
-    await mkdir(CACHE, { recursive: true })
-    await writeFile(ruta, JSON.stringify(datos))
-    return datos
-  }
-}
-
-/**
- * @param {string} par p. ej. BTCUSDT
- * @param {'1h'|'4h'|'1d'} intervalo
- * @param {number} inicio
- * @param {number} fin
- */
-async function descargarVelas(par, intervalo, inicio, fin) {
-  /** @type {unknown[][]} */
-  const filas = await conCache(`${par}-${intervalo}-${inicio}-${fin}`, async () => {
-    /** @type {unknown[][]} */
-    const todas = []
-    let cursor = inicio
-    while (cursor < fin) {
-      const url = `${BINANCE}?symbol=${par}&interval=${intervalo}&startTime=${cursor}&endTime=${fin - 1}&limit=1000`
-      const res = await fetch(url)
-      if (!res.ok) throw new Error(`Binance ${res.status} en ${url}`)
-      /** @type {unknown[][]} */
-      const lote = await res.json()
-      if (lote.length === 0) break
-      todas.push(...lote)
-      cursor = Number(lote[lote.length - 1][0]) + 1
-      if (lote.length < 1000) break
-    }
-    return todas
-  })
-  return desdeBinance(filas)
-}
-
-async function descargarFng() {
-  /** @type {{ data: { value: string, timestamp: string }[] }} */
-  const json = await conCache(`fng-${Math.floor(hasta / DIA)}`, async () => {
-    const res = await fetch('https://api.alternative.me/fng/?limit=0&format=json')
-    if (!res.ok) throw new Error(`Fear & Greed ${res.status}`)
-    return res.json()
-  })
-  return json.data.map((d) => ({ t: Number(d.timestamp) * 1000, valor: Number(d.value) })).sort((a, b) => a.t - b.t)
-}
-
 console.log(`Backtest ${estrategia.VERSION} · ${new Date(desde).toISOString().slice(0, 10)} → ${new Date(hasta).toISOString().slice(0, 10)} · ${monedas.join(', ')}`)
 /** @type {Record<string, import('../core/backtest.js').SerieMoneda>} */
 const series = {}
@@ -96,7 +37,7 @@ for (const m of monedas) {
   }
   console.log(`${series[m]['1h'].length} velas 1h`)
 }
-const fng = await descargarFng()
+const fng = await descargarFng(hasta)
 
 const inicioCalculo = Date.now()
 const resultado = ejecutarBacktest({ series, fng, desde, hasta, capitalInicial, estrategia })
