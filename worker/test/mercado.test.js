@@ -151,6 +151,7 @@ describe('ejecutarMercado (cron)', () => {
 
   test('si falla el lote de una moneda, el resto entra, el libro cuadra y la moneda se recupera después', async () => {
     const base = crearD1()
+    await crearSimulacion(base, { capitalInicial: 10_000, version: 'v1', ahora: 0 })
     const escenario = crearEscenario()
     // D1 que rechaza el lote de ETH, como un error transitorio de D1.
     const db = {
@@ -259,6 +260,7 @@ describe('ejecutarMercado (cron)', () => {
 
   test('OKX limitando las velas USDT de BTC: Bybit las sirve, BTC no queda SIN_DATOS y la fuente queda anotada (sin entrar en la caché)', async () => {
     const db = crearD1()
+    await crearSimulacion(db, { capitalInicial: 10_000, version: 'v1', ahora: 0 })
     const escenario = crearEscenario()
     const ahora = ahoraDe(0)
     const fetch = fetchEscenario(escenario, ahora, { limitado: (url) => url.includes('candles?instId=BTC-USDT') })
@@ -273,7 +275,9 @@ describe('ejecutarMercado (cron)', () => {
     const claves = await filas(db, 'SELECT instrumento, intervalo FROM cache_velas ORDER BY instrumento, intervalo')
     assert.deepEqual(claves.map((c) => `${c.instrumento} ${c.intervalo}`), ['BTC-EUR 1h', 'ETH-EUR 1h', 'ETH-USDT 1d', 'ETH-USDT 1h', 'ETH-USDT 4h'])
     // Igual que con OKX: la misma señal que una ejecución sin límite.
-    const normal = await ejecutarMercado({ esperar: sinEspera, env: entorno(crearD1()), fetch: fetchEscenario(escenario, ahora), ahora })
+    const otra = crearD1()
+    await crearSimulacion(otra, { capitalInicial: 10_000, version: 'v1', ahora: 0 })
+    const normal = await ejecutarMercado({ esperar: sinEspera, env: entorno(otra), fetch: fetchEscenario(escenario, ahora), ahora })
     assert.deepEqual(r.senales[0].componentes, normal.senales[0].componentes)
   })
 
@@ -297,6 +301,7 @@ describe('ejecutarMercado (cron)', () => {
 
   test('si no se puede escribir la caché, la ejecución sigue ok y lo anota', async () => {
     const base = crearD1()
+    await crearSimulacion(base, { capitalInicial: 10_000, version: 'v1', ahora: 0 })
     const db = {
       prepare: (/** @type {string} */ sql) => base.prepare(sql),
       batch: async (/** @type {any[]} */ sentencias) => {

@@ -26,10 +26,15 @@ export const COMPONENTES = Object.freeze([
   { clave: 'fng', letra: 'F', nombre: 'Fear & Greed' },
 ])
 
-/** @param {string|undefined} version @returns {Record<string, number>} */
+/**
+ * Pesos de la estrategia de la señal; las del laboratorio (v3…) no tienen y usan los de v1: solo dan T y el
+ * peso efectivo se renormaliza sobre los presentes.
+ * @param {string|undefined} version @returns {Record<string, number>}
+ */
 function pesosDe(version) {
+  /** @type {{ PARAMETROS: { pesos?: Record<string, number> } }} */
   const e = version && Object.hasOwn(ESTRATEGIAS, version) ? ESTRATEGIAS[/** @type {keyof typeof ESTRATEGIAS} */ (version)] : ESTRATEGIAS.v1
-  return e.PARAMETROS.pesos
+  return e.PARAMETROS.pesos ?? ESTRATEGIAS.v1.PARAMETROS.pesos
 }
 
 /**

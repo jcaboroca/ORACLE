@@ -3,7 +3,7 @@
 // Estrategia: red primero (una versión nueva entra sin trucos) y, sin red, la copia guardada.
 // Al cambiar cualquier archivo de ESTRUCTURA, sube VERSION.
 
-const VERSION = 'oracle-v2'
+const VERSION = 'oracle-v3'
 const ESTRUCTURA = [
   './',
   './index.html',
@@ -30,7 +30,14 @@ const ESTRUCTURA = [
   './js/vistas/panel.js',
   './core/estrategia-v1.js',
   './core/estrategia-v2.js',
+  './core/estrategia-v3.js',
+  './core/estrategia-v4.js',
+  './core/estrategia-v5.js',
   './core/estrategias.js',
+  './core/familias/comun.js',
+  './core/familias/cruce.js',
+  './core/familias/momentum.js',
+  './core/familias/ruptura.js',
   './core/indicadores.js',
   './core/velas.js',
   './vendor/lightweight-charts.standalone.production.js',

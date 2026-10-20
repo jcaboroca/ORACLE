@@ -48,6 +48,13 @@ describe('señal en la interfaz', () => {
     assert.ok(barras.every((b) => b.ausente && b.pesoEfectivo === 0))
   })
 
+  test('estrategias del laboratorio (sin pesos propios): solo T presente, con todo el peso efectivo', () => {
+    const barras = barrasComponentes({
+      version: 'v3', veredicto: 'COMPRAR', ausentes: ['derivados', 'noticias', 'fng'], componentes: { tecnico: 1, derivados: null, noticias: null, fng: null },
+    })
+    assert.deepEqual(barras.map((b) => [b.letra, b.ausente, b.pesoEfectivo]), [['T', false, 1], ['D', true, 0], ['N', true, 0], ['F', true, 0]])
+  })
+
   test('valores negativos y fuera de rango: barra recortada a 1', () => {
     const [t, d] = barrasComponentes({ version: 'v2', ausentes: [], componentes: { tecnico: -0.42, derivados: -1.2, noticias: 0.1, fng: 0.5 } })
     assert.deepEqual([t.sentido, t.ancho, t.texto], ['negativo', 0.42, '-0,42'])
